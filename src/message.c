@@ -606,32 +606,43 @@ static int qd_check_and_advance(qd_buffer_t         **buffer,
         return 0;
 
     switch (tag_subcat) {
-    case 0x40:               break;
-    case 0x50: consume = 1;  break;
-    case 0x60: consume = 2;  break;
-    case 0x70: consume = 4;  break;
-    case 0x80: consume = 8;  break;
-    case 0x90: consume = 16; break;
+        case 0x40:
+            break;
+        case 0x50:
+            consume = 1;
+            break;
+        case 0x60:
+            consume = 2;
+            break;
+        case 0x70:
+            consume = 4;
+            break;
+        case 0x80:
+            consume = 8;
+            break;
+        case 0x90:
+            consume = 16;
+            break;
 
-    case 0xB0:
-    case 0xD0:
-    case 0xF0:
-        pre_consume += 3;
-        consume |= ((int) next_octet(&test_cursor, &test_buffer)) << 24;
-        if (!test_cursor) return 0;
-        consume |= ((int) next_octet(&test_cursor, &test_buffer)) << 16;
-        if (!test_cursor) return 0;
-        consume |= ((int) next_octet(&test_cursor, &test_buffer)) << 8;
-        if (!test_cursor) return 0;
-        // Fall through to the next case...
+        case 0xB0:
+        case 0xD0:
+        case 0xF0:
+            pre_consume += 3;
+            consume |= ((int) next_octet(&test_cursor, &test_buffer)) << 24;
+            if (!test_cursor) return 0;
+            consume |= ((int) next_octet(&test_cursor, &test_buffer)) << 16;
+            if (!test_cursor) return 0;
+            consume |= ((int) next_octet(&test_cursor, &test_buffer)) << 8;
+            if (!test_cursor) return 0;
+            // Fall through to the next case...
 
-    case 0xA0:
-    case 0xC0:
-    case 0xE0:
-        pre_consume += 1;
-        consume |= (int) next_octet(&test_cursor, &test_buffer);
-        if (!test_cursor) return 0;
-        break;
+        case 0xA0:
+        case 0xC0:
+        case 0xE0:
+            pre_consume += 1;
+            consume |= (int) next_octet(&test_cursor, &test_buffer);
+            if (!test_cursor) return 0;
+            break;
     }
 
     location->length = pre_consume + consume;
@@ -837,7 +848,16 @@ qd_message_t *qd_message()
     DEQ_INIT(msg->ma_to_override);
     DEQ_INIT(msg->ma_trace);
     DEQ_INIT(msg->ma_ingress);
-    msg->ma_phase = 0;
+    msg->more          = true;
+    msg->ma_phase      = 0;
+    ZERO(&msg->cursor);
+    /*msg->cursor.buffer = 0;
+    msg->cursor.offset = 0;
+    msg->cursor.length = 0;
+    msg->cursor.hdr_length = 0;
+    msg->cursor.parsed = 0;
+    */
+
     msg->content = new_qd_message_content_t();
 
     if (msg->content == 0) {
@@ -975,7 +995,7 @@ void qd_message_set_ingress_annotation(qd_message_t *in_msg, qd_composed_field_t
     qd_compose_free(ingress_field);
 }
 
-qd_message_t *qd_message_receive(pn_delivery_t *delivery)
+qd_message_t *qd_message_receive(pn_delivery_t *delivery, bool discard)
 {
     pn_link_t        *link = pn_delivery_link(delivery);
     ssize_t           rc;
@@ -989,7 +1009,10 @@ qd_message_t *qd_message_receive(pn_delivery_t *delivery)
     // we've received anything on this delivery.  Allocate a message descriptor and
     // link it and the delivery together.
     //
+    bool first_time = false;
+
     if (!msg) {
+        first_time = true; // this is the first time  we've received anything on this delivery
         msg = (qd_message_pvt_t*) qd_message();
         pn_record_def(record, PN_DELIVERY_CTX, PN_WEAKREF);
         pn_record_set(record, PN_DELIVERY_CTX, (void*) msg);
@@ -1001,16 +1024,27 @@ qd_message_t *qd_message_receive(pn_delivery_t *delivery)
     // an empty one and add it to the message.
     //
     buf = DEQ_TAIL(msg->content->buffers);
-    if (!buf) {
+    if (!buf && !discard) {
         buf = qd_buffer();
         DEQ_INSERT_TAIL(msg->content->buffers, buf);
+        if (first_time) {
+            msg->cursor.buffer = buf;
+            msg->cursor.offset = 0;
+        }
     }
 
     while (1) {
-        //
-        // Try to receive enough data to fill the remaining space in the tail buffer.
-        //
-        rc = pn_link_recv(link, (char*) qd_buffer_cursor(buf), qd_buffer_capacity(buf));
+
+        if (discard) {
+            char dummy[buffer_size];
+            rc = pn_link_recv(link, dummy, 512);
+        }
+        else {
+            //
+            // Try to receive enough data to fill the remaining space in the tail buffer.
+            //
+            rc = pn_link_recv(link, (char*) qd_buffer_cursor(buf), qd_buffer_capacity(buf));
+        }
 
         //
         // If we receive PN_EOS, we have come to the end of the message.
@@ -1027,28 +1061,43 @@ qd_message_t *qd_message_receive(pn_delivery_t *delivery)
             // of the buffer size.
             //
 
-            if (qd_buffer_size(buf) == 0) {
+            if (buf && qd_buffer_size(buf) == 0) {
                 DEQ_REMOVE_TAIL(msg->content->buffers);
                 qd_buffer_free(buf);
             }
+
+            //
+            // We have received the entire message, set the more flag to false
+            //
+            msg->more = false;
 
             return (qd_message_t*) msg;
         }
 
         if (rc > 0) {
             //
-            // We have received a positive number of bytes for the message.  Advance
-            // the cursor in the buffer.
+            // Should the buffer be added to the buffer list or should it be freed?
             //
-            qd_buffer_insert(buf, rc);
+            if (discard) {
+                DEQ_REMOVE_TAIL(msg->content->buffers);
+                qd_buffer_free(buf);
+            }
+            else {
+                //
+                // We have received a positive number of bytes for the message.  Advance
+                // the cursor in the buffer.
+                //
+                qd_buffer_insert(buf, rc);
 
-            //
-            // If the buffer is full, allocate a new empty buffer and append it to the
-            // tail of the message's list.
-            //
-            if (qd_buffer_capacity(buf) == 0) {
-                buf = qd_buffer();
-                DEQ_INSERT_TAIL(msg->content->buffers, buf);
+                //
+                // If the buffer is full, allocate a new empty buffer and append it to the
+                // tail of the message's list.
+                //
+                if (qd_buffer_capacity(buf) == 0) {
+                    buf = qd_buffer();
+                    DEQ_INSERT_TAIL(msg->content->buffers, buf);
+                }
+
             }
         } else
             //
@@ -1056,7 +1105,7 @@ qd_message_t *qd_message_receive(pn_delivery_t *delivery)
             // all of the data available up to this point, but it does not constitute
             // the entire message.  We'll be back later to finish it up.
             //
-            break;
+            return (qd_message_t*) msg;
     }
 
     return 0;
@@ -1151,15 +1200,12 @@ void qd_message_send(qd_message_t *in_msg,
 {
     qd_message_pvt_t     *msg     = (qd_message_pvt_t*) in_msg;
     qd_message_content_t *content = msg->content;
-    qd_buffer_t          *buf     = DEQ_HEAD(content->buffers);
-    unsigned char        *cursor;
+    qd_buffer_t          *buf     = DEQ_HEAD(content->buffers); //qd_message_cursor_buffer(msg);
+    //int offset                    = qd_message_cursor_offset(msg);
+    //int buf_capacity              = qd_buffer_capacity(buf);
+    //int buf_size                  = qd_buffer_size(buf);
     pn_link_t            *pnl     = qd_link_pn(link);
 
-    qd_buffer_list_t new_ma;
-    DEQ_INIT(new_ma);
-
-    // Process  the message annotations if any
-    compose_message_annotations(msg, &new_ma, strip_annotations);
 
     //
     // This is the case where the message annotations have been modified.
@@ -1172,15 +1218,47 @@ void qd_message_send(qd_message_t *in_msg,
     // the message annotations
     //
     // ??? NO LONGER NECESSARY???
-    if (!qd_message_check(in_msg, QD_DEPTH_MESSAGE_ANNOTATIONS)) {
-        qd_log(log_source, QD_LOG_ERROR, "Cannot send: %s", qd_error_message);
+    //if (!qd_message_check(in_msg, QD_DEPTH_MESSAGE_ANNOTATIONS)) {
+    //    qd_log(log_source, QD_LOG_ERROR, "Cannot send: %s", qd_error_message);
+    //    return;
+    //}
+
+    //
+    // If the link was link routed, just send out the contents of the buffers, nothing else to do.
+    //
+    /*if (link_route) {
+
+        while (buf) {
+            int buffer_size = qd_buffer_size(buf);
+            int buffer_capacity = qd_buffer_capacity(buf);
+            unsigned char *start  = qd_buffer_advance(buf, offset);
+
+            pn_link_send(pnl, start, buffer_size);
+            buf = DEQ_NEXT(buf);
+            if (buf) {
+                    qd_message_set_cursor(in_msg, buf, 0);
+            }
+            else {
+                   // qd_message_set_cursor_
+            }
+        }
         return;
-    }
+    }*/
+
+    qd_buffer_list_t new_ma;
+    DEQ_INIT(new_ma);
+
+    // Process  the message annotations if any
+    compose_message_annotations(msg, &new_ma, strip_annotations);
 
     //
     // Send header if present
     //
+    unsigned char        *cursor;
     cursor = qd_buffer_base(buf);
+
+
+
     if (content->section_message_header.length > 0) {
         buf    = content->section_message_header.buffer;
         cursor = content->section_message_header.offset + qd_buffer_base(buf);
@@ -1226,6 +1304,16 @@ void qd_message_send(qd_message_t *in_msg,
     }
 }
 
+qd_message_depth_t qd_message_parse_depth(bool link_route, bool anonymous, bool get_user_id)
+{
+    if (link_route)
+        return QD_DEPTH_NONE;
+    else if (anonymous || get_user_id)
+        return QD_DEPTH_PROPERTIES;
+
+    return QD_DEPTH_MESSAGE_ANNOTATIONS;
+
+}
 
 static int qd_check_field_LH(qd_message_content_t *content,
                              qd_message_depth_t    depth,
@@ -1247,7 +1335,6 @@ static int qd_check_field_LH(qd_message_content_t *content,
     }
     return 1;
 }
-
 
 static bool qd_message_check_LH(qd_message_content_t *content, qd_message_depth_t depth)
 {
@@ -1360,6 +1447,27 @@ static bool qd_message_check_LH(qd_message_content_t *content, qd_message_depth_
     }
 
     return true;
+}
+
+bool qd_message_more(qd_message_t *in_msg) {
+    qd_message_pvt_t     *msg     = (qd_message_pvt_t*) in_msg;
+    return msg->more;
+}
+
+qd_buffer_t *qd_message_cursor_buffer(qd_message_pvt_t *in_msg)
+{
+    return in_msg->cursor.buffer;
+}
+
+int qd_message_cursor_offset(qd_message_pvt_t *in_msg)
+{
+    return in_msg->cursor.offset;
+}
+
+qd_field_location_t qd_message_cursor(qd_message_pvt_t *in_msg)
+{
+    qd_message_pvt_t     *msg     = (qd_message_pvt_t*) in_msg;
+    return msg->cursor;
 }
 
 

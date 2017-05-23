@@ -203,14 +203,15 @@ int  qd_message_get_phase_annotation(const qd_message_t *msg);
 void qd_message_set_ingress_annotation(qd_message_t *msg, qd_composed_field_t *ingress_field);
 
 /**
- * Receive message data via a delivery.  This function may be called more than once on the same
- * delivery if the message spans multiple frames.  Once a complete message has been received, this
- * function shall return the message.
+ * Receive message data frame by frame via a delivery.  This function may be called more than once on the same
+ * delivery if the message spans multiple frames. Returns a message with a partially filled buffer, the buffer
+ * fills up on successive calls to this function.
  *
  * @param delivery An incoming delivery from a link
+ * @param discard if true the bytes received will be discarded.
  * @return A pointer to the complete message or 0 if the message is not yet complete.
  */
-qd_message_t *qd_message_receive(pn_delivery_t *delivery);
+qd_message_t *qd_message_receive(pn_delivery_t *delivery, bool discard);
 
 /**
  * Send the message outbound on an outgoing link.
@@ -257,6 +258,13 @@ char* qd_message_repr(qd_message_t *msg, char* buffer, size_t len, qd_log_bits l
 int qd_message_repr_len();
 
 qd_log_source_t* qd_message_log_source();
+
+/**
+ * Is this message still being received?
+ * Return false if the message is fully received
+ * Returns true if only the partial message has been received, if there is more of the message to be come.
+ */
+bool qd_message_more(qd_message_t *msg);
 
 ///@}
 

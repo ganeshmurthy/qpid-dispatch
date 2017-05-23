@@ -23,8 +23,8 @@
 #include <stdint.h>
 #include <string.h>
 
-
-static size_t buffer_size = 512;
+size_t buffer_size = 512;
+//static size_t buffer_size = 512;
 static int    size_locked = 0;
 
 ALLOC_DECLARE(qd_buffer_t);
@@ -84,6 +84,12 @@ void qd_buffer_insert(qd_buffer_t *buf, size_t len)
 {
     buf->size += len;
     assert(buf->size <= buffer_size);
+}
+
+unsigned char *qd_buffer_advance(qd_buffer_t *buf, size_t len)
+{
+    assert(len >=0);
+    return ((unsigned char*) &buf[1]) + len;
 }
 
 unsigned int qd_buffer_list_clone(qd_buffer_list_t *dst, const qd_buffer_list_t *src)

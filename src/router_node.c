@@ -212,51 +212,58 @@ static qd_iterator_t *router_annotate_message(qd_router_t       *router,
  */
 static void AMQP_rx_handler(void* context, qd_link_t *link, pn_delivery_t *pnd)
 {
-    qd_router_t    *router   = (qd_router_t*) context;
-    pn_link_t      *pn_link  = qd_link_pn(link);
-    qdr_link_t     *rlink    = (qdr_link_t*) qd_link_get_context(link);
-    qd_connection_t  *conn   = qd_link_connection(link);
+    qd_router_t    *router       = (qd_router_t*) context;
+    pn_link_t      *pn_link      = qd_link_pn(link);
+    qdr_link_t     *rlink        = (qdr_link_t*) qd_link_get_context(link);
+    qd_connection_t  *conn       = qd_link_connection(link);
     const qd_server_config_t *cf = qd_connection_config(conn);
-    qdr_delivery_t *delivery = 0;
-    qd_message_t   *msg;
+    qdr_delivery_t *delivery     = pn_delivery_get_context(pnd);
 
     //
     // Receive the message into a local representation.  If the returned message
     // pointer is NULL, we have not yet received a complete message.
     //
-    // Note:  In the link-routing case, consider cutting the message through.  There's
-    //        no reason to wait for the whole message to be received before starting to
-    //        send it.
-    //
-    msg = qd_message_receive(pnd);
 
-    if (!msg)
-        return;
+    bool proceed = false;
+    if (delivery) {
+        // What about the PN_MODIFIED outcome, should that be considered here?
+        proceed = !qdr_delivery_released(delivery) && !qdr_delivery_rejected(delivery);
+    }
+    else
+        proceed = true;
 
-    if (cf->log_message) {
-        char repr[qd_message_repr_len()];
-        char* message_repr = qd_message_repr((qd_message_t*)msg,
-                                             repr,
-                                             sizeof(repr),
-                                             cf->log_bits);
-        if (message_repr) {
-            qd_log(qd_message_log_source(), QD_LOG_TRACE, "Link %s received %s",
-                   pn_link_name(pn_link),
-                   message_repr);
+
+    qd_message_t   *msg          = qd_message_receive(pnd, proceed);
+    bool more                    = qd_message_more(msg);
+
+    if (!more) {
+        //
+        // The entire message has been received and we are ready to consume the delivery by calling pn_link_advance().
+        //
+        pn_link_advance(pn_link);
+
+        // Since the entire message has been received, we can print out its contents if necessary.
+        if (cf->log_message) {
+            char repr[qd_message_repr_len()];
+            char* message_repr = qd_message_repr((qd_message_t*)msg,
+                                                 repr,
+                                                 sizeof(repr),
+                                                 cf->log_bits);
+            if (message_repr) {
+                qd_log(qd_message_log_source(), QD_LOG_TRACE, "Link %s received %s",
+                       pn_link_name(pn_link),
+                       message_repr);
+            }
         }
     }
-
-    //
-    // Consume the delivery.
-    //
-    pn_link_advance(pn_link);
 
     //
     // If there's no router link, free the message and finish.  It's likely that the link
     // is closing.
     //
     if (!rlink) {
-        qd_message_free(msg);
+        if (!more) // The entire message has been received but there is nowhere to send it to, free it and do nothing.
+            qd_message_free(msg);
         return;
     }
 
@@ -265,18 +272,33 @@ static void AMQP_rx_handler(void* context, qd_link_t *link, pn_delivery_t *pnd)
     //
     if (qdr_link_is_routed(rlink)) {
         pn_delivery_tag_t dtag = pn_delivery_tag(pnd);
-        delivery = qdr_link_deliver_to_routed_link(rlink, msg, pn_delivery_settled(pnd), (uint8_t*) dtag.start, dtag.size,
-                                                   pn_disposition_type(pn_delivery_remote(pnd)), pn_disposition_data(pn_delivery_remote(pnd)));
-
+        //
+        // A delivery object was already available via pn_delivery_get_context. This means a qdr_delivery was already created. Use it to continue delivery.
+        //
         if (delivery) {
-            if (pn_delivery_settled(pnd))
+            qdr_deliver_continue(delivery);
+
+            //
+            // Settle the proton delivery only if all the data has been received.
+            // TODO - Do we have to wait until all the data is received.
+            //
+            if (pn_delivery_settled(pnd) && !more) {
                 pn_delivery_settle(pnd);
-            else {
-                pn_delivery_set_context(pnd, delivery);
-                qdr_delivery_set_context(delivery, pnd);
-                qdr_delivery_incref(delivery);
             }
         }
+        else {
+            delivery = qdr_link_deliver_to_routed_link(rlink,
+                                                       msg,
+                                                       pn_delivery_settled(pnd),
+                                                       (uint8_t*) dtag.start,
+                                                       dtag.size,
+                                                       pn_disposition_type(pn_delivery_remote(pnd)),
+                                                       pn_disposition_data(pn_delivery_remote(pnd)));
+            pn_delivery_set_context(pnd, delivery);
+            qdr_delivery_set_context(delivery, pnd);
+            qdr_delivery_incref(delivery);
+        }
+
         return;
     }
 
@@ -311,7 +333,26 @@ static void AMQP_rx_handler(void* context, qd_link_t *link, pn_delivery_t *pnd)
     qd_message_depth_t  validation_depth = (anonymous_link || check_user) ? QD_DEPTH_PROPERTIES : QD_DEPTH_MESSAGE_ANNOTATIONS;
     bool                valid_message    = qd_message_check(msg, validation_depth);
 
-    if (valid_message) {
+    if (!valid_message && !more) {
+        //
+        // The entire message has been received and the message is still invalid.  Reject the message.
+        //
+        pn_link_flow(pn_link, 1);
+        pn_delivery_update(pnd, PN_REJECTED);
+        pn_delivery_settle(pnd);
+        qd_message_free(msg);
+    }
+
+    if (!valid_message )
+        return;
+
+    if (delivery) {
+        //
+        // A delivery object was already available via pn_delivery_get_context. This means a qdr_delivery_t object was already created. Use it to continue delivery.
+        //
+        qdr_deliver_continue(delivery);
+    }
+    else {
         if (check_user) {
             // This connection must not allow proxied user_id
             qd_iterator_t *userid_iter  = qd_message_field_iterator(msg, QD_FIELD_USER_ID);
@@ -406,13 +447,18 @@ static void AMQP_rx_handler(void* context, qd_link_t *link, pn_delivery_t *pnd)
         }
 
         if (delivery) {
-            if (pn_delivery_settled(pnd))
+            //
+            // Settle the proton delivery only if all the data has arrived
+            //
+            if (pn_delivery_settled(pnd) && !more) {
                 pn_delivery_settle(pnd);
-            else {
-                pn_delivery_set_context(pnd, delivery);
-                qdr_delivery_set_context(delivery, pnd);
-                qdr_delivery_incref(delivery);
             }
+
+            pn_delivery_set_context(pnd, delivery);
+            qdr_delivery_set_context(delivery, pnd);
+
+            qdr_delivery_incref(delivery);
+
         } else {
             //
             // The message is now and will always be unroutable because there is no address.
@@ -434,17 +480,6 @@ static void AMQP_rx_handler(void* context, qd_link_t *link, pn_delivery_t *pnd)
         //   If there's a to-override in the annotations, use that address
         //   Or, use the 'to' field in the message properties
         //
-
-
-
-    } else {
-        //
-        // Message is invalid.  Reject the message and don't involve the router core.
-        //
-        pn_link_flow(pn_link, 1);
-        pn_delivery_update(pnd, PN_REJECTED);
-        pn_delivery_settle(pnd);
-        qd_message_free(msg);
     }
 }
 
@@ -1043,27 +1078,42 @@ static void CORE_link_deliver(void *context, qdr_link_t *link, qdr_delivery_t *d
 
     // handle any delivery-state on the transfer e.g. transactional-state
     qdr_delivery_write_extension_state(dlv, pdlv, true);
+
     //
     // If the remote send settle mode is set to 'settled', we should settle the delivery on behalf of the receiver.
     //
     bool remote_snd_settled = qd_link_remote_snd_settle_mode(qlink) == PN_SND_SETTLED;
 
     if (!settled && !remote_snd_settled) {
-        pn_delivery_set_context(pdlv, dlv);
-        qdr_delivery_set_context(dlv, pdlv);
-        qdr_delivery_incref(dlv);
+        if (qdr_delivery_get_context(dlv) == 0)  {
+            pn_delivery_set_context(pdlv, dlv);
+            qdr_delivery_set_context(dlv, pdlv);
+            qdr_delivery_incref(dlv);
+        }
     }
 
     qd_message_send(qdr_delivery_message(dlv), qlink, qdr_link_strip_annotations_out(link));
 
-    if (!settled && remote_snd_settled)
-        // Tell the core that the delivery has been accepted and settled, since we are settling on behalf of the receiver
-        qdr_delivery_update_disposition(router->router_core, dlv, PN_ACCEPTED, true, 0, 0, false);
+    //
+    // Settle, call pn_link_advance on the link etc only if the entire message has been received
+    //
+    if (!qd_message_more(qdr_delivery_message(dlv))) {
 
-    if (settled || remote_snd_settled)
-        pn_delivery_settle(pdlv);
+        if (!settled && remote_snd_settled) {
+            //
+            // Tell the core that the delivery has been accepted and settled, since we are settling on behalf of the receiver
+            //
+            qdr_delivery_update_disposition(router->router_core, dlv, PN_ACCEPTED, true, 0, 0, false);
+        }
 
-    pn_link_advance(plink);
+        if (settled || remote_snd_settled)
+            pn_delivery_settle(pdlv);
+
+        //
+        // Advance the link since this delivery is complete.
+        //
+        pn_link_advance(plink);
+    }
 }
 
 

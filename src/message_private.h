@@ -97,7 +97,10 @@ typedef struct {
 } qd_message_content_t;
 
 typedef struct {
-    DEQ_LINKS(qd_message_t);   // Deque linkage that overlays the qd_message_t
+    DEQ_LINKS(qd_message_t);                // Deque linkage that overlays the qd_message_t
+    qd_field_location_t   cursor;           // A pointer to the current location of the byte stream.
+    bool                  more;             // true if the message has not been completely received
+    qd_message_depth_t    message_depth;
     qd_message_content_t *content;
     qd_buffer_list_t      ma_to_override;  // to field in outgoing message annotations.
     qd_buffer_list_t      ma_trace;        // trace list in outgoing message annotations
@@ -112,6 +115,12 @@ ALLOC_DECLARE(qd_message_content_t);
 
 /** Initialize logging */
 void qd_message_initialize();
+
+qd_field_location_t qd_message_cursor(qd_message_pvt_t *msg);
+
+qd_buffer_t *qd_message_cursor_buffer(qd_message_pvt_t *in_msg);
+
+int qd_message_cursor_offset(qd_message_pvt_t *in_msg);
 
 ///@}
 

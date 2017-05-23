@@ -32,6 +32,8 @@ typedef struct qd_buffer_t qd_buffer_t;
 
 DEQ_DECLARE(qd_buffer_t, qd_buffer_list_t);
 
+extern size_t buffer_size;
+
 /** A raw byte buffer .*/
 struct qd_buffer_t {
     DEQ_LINKS(qd_buffer_t);
