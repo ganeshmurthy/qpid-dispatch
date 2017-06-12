@@ -44,7 +44,8 @@ qd_buffer_t *qd_buffer(void)
     qd_buffer_t *buf = new_qd_buffer_t();
 
     DEQ_ITEM_INIT(buf);
-    buf->size = 0;
+    buf->size   = 0;
+    buf->fanout = 0;
     return buf;
 }
 
@@ -60,7 +61,6 @@ unsigned char *qd_buffer_base(qd_buffer_t *buf)
 {
     return (unsigned char*) &buf[1];
 }
-
 
 unsigned char *qd_buffer_cursor(qd_buffer_t *buf)
 {
@@ -139,4 +139,14 @@ unsigned int qd_buffer_list_length(const qd_buffer_list_t *list)
         buf = DEQ_NEXT(buf);
     }
     return len;
+}
+
+
+void qd_buffer_add_fanout(qd_buffer_t *buf)
+{
+    buf->fanout++;
+}
+size_t qd_buffer_fanout(qd_buffer_t *buf)
+{
+    return buf->fanout;
 }

@@ -38,12 +38,23 @@ extern size_t buffer_size;
 struct qd_buffer_t {
     DEQ_LINKS(qd_buffer_t);
     unsigned int size;          ///< Size of data content
+    unsigned int fanout;        // The number of receivers for this buffer
 };
 
 /**
  * Set the initial buffer capacity to be allocated by future calls to qp_buffer.
  */
 void qd_buffer_set_size(size_t size);
+
+/**
+ * Increase the fanout by 1. How many receivers should this buffer be sent to.
+ */
+void qd_buffer_add_fanout(qd_buffer_t *buf);
+
+/**
+ * Return the buffer's fanout.
+ */
+size_t qd_buffer_fanout(qd_buffer_t *buf);
 
 /**
  * Create a buffer with capacity set by last call to qd_buffer_set_size(), and data
@@ -93,6 +104,13 @@ size_t qd_buffer_size(qd_buffer_t *buf);
  * @param len The number of octets that have been appended to the buffer
  */
 void qd_buffer_insert(qd_buffer_t *buf, size_t len);
+
+/**
+ * Advance the buffer by len
+ * @param buf A pointer to an allocated buffer
+ * @param len The number of octets that by which the buffer should be advanced.
+ */
+unsigned char *qd_buffer_advance(qd_buffer_t *buf, size_t len);
 
 /**
  * Create a new buffer list by cloning an existing one.

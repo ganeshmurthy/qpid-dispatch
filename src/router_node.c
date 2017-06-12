@@ -223,17 +223,7 @@ static void AMQP_rx_handler(void* context, qd_link_t *link, pn_delivery_t *pnd)
     // Receive the message into a local representation.  If the returned message
     // pointer is NULL, we have not yet received a complete message.
     //
-
-    bool proceed = false;
-    if (delivery) {
-        // What about the PN_MODIFIED outcome, should that be considered here?
-        proceed = !qdr_delivery_released(delivery) && !qdr_delivery_rejected(delivery);
-    }
-    else
-        proceed = true;
-
-
-    qd_message_t   *msg          = qd_message_receive(pnd, proceed);
+    qd_message_t   *msg          = qd_message_receive(pnd);
     bool more                    = qd_message_more(msg);
 
     if (!more) {
@@ -280,7 +270,6 @@ static void AMQP_rx_handler(void* context, qd_link_t *link, pn_delivery_t *pnd)
 
             //
             // Settle the proton delivery only if all the data has been received.
-            // TODO - Do we have to wait until all the data is received.
             //
             if (pn_delivery_settled(pnd) && !more) {
                 pn_delivery_settle(pnd);
@@ -337,149 +326,152 @@ static void AMQP_rx_handler(void* context, qd_link_t *link, pn_delivery_t *pnd)
         //
         // The entire message has been received and the message is still invalid.  Reject the message.
         //
+        qd_message_set_discard(msg, true);
         pn_link_flow(pn_link, 1);
         pn_delivery_update(pnd, PN_REJECTED);
         pn_delivery_settle(pnd);
         qd_message_free(msg);
     }
 
-    if (!valid_message )
+    if (!valid_message) {
         return;
+    }
+
+    if (delivery) {
+        qdr_deliver_continue(delivery);
+        return;
+    }
+
+    if (check_user) {
+        // This connection must not allow proxied user_id
+        qd_iterator_t *userid_iter  = qd_message_field_iterator(msg, QD_FIELD_USER_ID);
+        if (userid_iter) {
+            // The user_id property has been specified
+            if (qd_iterator_remaining(userid_iter) > 0) {
+                // user_id property in message is not blank
+                if (!qd_iterator_equal(userid_iter, (const unsigned char *)conn->user_id)) {
+                    // This message is rejected: attempted user proxy is disallowed
+                    qd_log(router->log_source, QD_LOG_DEBUG, "Message rejected due to user_id proxy violation. User:%s", conn->user_id);
+                    pn_link_flow(pn_link, 1);
+                    pn_delivery_update(pnd, PN_REJECTED);
+                    pn_delivery_settle(pnd);
+                    qd_message_free(msg);
+                    qd_iterator_free(userid_iter);
+                    return;
+                }
+            }
+            qd_iterator_free(userid_iter);
+        }
+    }
+
+    qd_parsed_field_t   *in_ma        = qd_message_message_annotations(msg);
+    qd_bitmask_t        *link_exclusions;
+    bool                 strip        = qdr_link_strip_annotations_in(rlink);
+    qd_iterator_t *ingress_iter = router_annotate_message(router, in_ma, msg, &link_exclusions, strip);
+
+    //
+    // Rules for delivering messages:
+    //
+    // For addressed (non-anonymous) links:
+    //   to-override must be set (done in the core?)
+    //   uses qdr_link_deliver to hand over to the core
+    //
+    // For anonymous links:
+    //   If there's a to-override in the annotations, use that address
+    //   Or, use the 'to' field in the message properties
+    //
+
+    if (anonymous_link) {
+        qd_iterator_t *addr_iter = 0;
+        int phase = 0;
+
+        //
+        // If the message has delivery annotations, get the to-override field from the annotations.
+        //
+        if (in_ma) {
+            qd_parsed_field_t *ma_to = qd_parse_value_by_key(in_ma, QD_MA_TO);
+            if (ma_to) {
+                addr_iter = qd_iterator_dup(qd_parse_raw(ma_to));
+                phase = qd_message_get_phase_annotation(msg);
+            }
+        }
+
+        //
+        // Still no destination address?  Use the TO field from the message properties.
+        //
+        if (!addr_iter) {
+            addr_iter = qd_message_field_iterator(msg, QD_FIELD_TO);
+
+            //
+            // If the address came from the TO field and we need to apply a tenant-space,
+            // set the to-override with the annotated address.
+            //
+            if (addr_iter && tenant_space) {
+                qd_iterator_reset_view(addr_iter, ITER_VIEW_ADDRESS_WITH_SPACE);
+                qd_iterator_annotate_space(addr_iter, tenant_space, tenant_space_len);
+                qd_composed_field_t *to_override = qd_compose_subfield(0);
+                qd_compose_insert_string_iterator(to_override, addr_iter);
+                qd_message_set_to_override_annotation(msg, to_override);
+            }
+        }
+
+        if (addr_iter) {
+            qd_iterator_reset_view(addr_iter, ITER_VIEW_ADDRESS_HASH);
+            if (phase > 0)
+                qd_iterator_annotate_phase(addr_iter, '0' + (char) phase);
+            delivery = qdr_link_deliver_to(rlink, msg, ingress_iter, addr_iter, pn_delivery_settled(pnd),
+                                           link_exclusions);
+        }
+    } else {
+        //
+        // This is a targeted link, not anonymous.
+        //
+        const char *term_addr = pn_terminus_get_address(qd_link_remote_target(link));
+        if (!term_addr)
+            term_addr = pn_terminus_get_address(qd_link_source(link));
+
+        if (term_addr) {
+            qd_composed_field_t *to_override = qd_compose_subfield(0);
+            if (tenant_space) {
+                qd_iterator_t *aiter = qd_iterator_string(term_addr, ITER_VIEW_ADDRESS_WITH_SPACE);
+                qd_iterator_annotate_space(aiter, tenant_space, tenant_space_len);
+                qd_compose_insert_string_iterator(to_override, aiter);
+                qd_iterator_free(aiter);
+            } else
+                qd_compose_insert_string(to_override, term_addr);
+            qd_message_set_to_override_annotation(msg, to_override);
+            int phase = qdr_link_phase(rlink);
+            if (phase != 0)
+                qd_message_set_phase_annotation(msg, phase);
+        }
+        delivery = qdr_link_deliver(rlink, msg, ingress_iter, pn_delivery_settled(pnd), link_exclusions);
+    }
 
     if (delivery) {
         //
-        // A delivery object was already available via pn_delivery_get_context. This means a qdr_delivery_t object was already created. Use it to continue delivery.
+        // Settle the proton delivery only if all the data has arrived
         //
-        qdr_deliver_continue(delivery);
-    }
-    else {
-        if (check_user) {
-            // This connection must not allow proxied user_id
-            qd_iterator_t *userid_iter  = qd_message_field_iterator(msg, QD_FIELD_USER_ID);
-            if (userid_iter) {
-                // The user_id property has been specified
-                if (qd_iterator_remaining(userid_iter) > 0) {
-                    // user_id property in message is not blank
-                    if (!qd_iterator_equal(userid_iter, (const unsigned char *)conn->user_id)) {
-                        // This message is rejected: attempted user proxy is disallowed
-                        qd_log(router->log_source, QD_LOG_DEBUG, "Message rejected due to user_id proxy violation. User:%s", conn->user_id);
-                        pn_link_flow(pn_link, 1);
-                        pn_delivery_update(pnd, PN_REJECTED);
-                        pn_delivery_settle(pnd);
-                        qd_message_free(msg);
-                        qd_iterator_free(userid_iter);
-                        return;
-                    }
-                }
-                qd_iterator_free(userid_iter);
-            }
-        }
-
-        qd_parsed_field_t   *in_ma        = qd_message_message_annotations(msg);
-        qd_bitmask_t        *link_exclusions;
-        bool                 strip        = qdr_link_strip_annotations_in(rlink);
-        qd_iterator_t *ingress_iter = router_annotate_message(router, in_ma, msg, &link_exclusions, strip);
-
-        if (anonymous_link) {
-            qd_iterator_t *addr_iter = 0;
-            int phase = 0;
-            
-            //
-            // If the message has delivery annotations, get the to-override field from the annotations.
-            //
-            if (in_ma) {
-                qd_parsed_field_t *ma_to = qd_parse_value_by_key(in_ma, QD_MA_TO);
-                if (ma_to) {
-                    addr_iter = qd_iterator_dup(qd_parse_raw(ma_to));
-                    phase = qd_message_get_phase_annotation(msg);
-                }
-            }
-
-            //
-            // Still no destination address?  Use the TO field from the message properties.
-            //
-            if (!addr_iter) {
-                addr_iter = qd_message_field_iterator(msg, QD_FIELD_TO);
-
-                //
-                // If the address came from the TO field and we need to apply a tenant-space,
-                // set the to-override with the annotated address.
-                //
-                if (addr_iter && tenant_space) {
-                    qd_iterator_reset_view(addr_iter, ITER_VIEW_ADDRESS_WITH_SPACE);
-                    qd_iterator_annotate_space(addr_iter, tenant_space, tenant_space_len);
-                    qd_composed_field_t *to_override = qd_compose_subfield(0);
-                    qd_compose_insert_string_iterator(to_override, addr_iter);
-                    qd_message_set_to_override_annotation(msg, to_override);
-                }
-            }
-
-            if (addr_iter) {
-                qd_iterator_reset_view(addr_iter, ITER_VIEW_ADDRESS_HASH);
-                if (phase > 0)
-                    qd_iterator_annotate_phase(addr_iter, '0' + (char) phase);
-                delivery = qdr_link_deliver_to(rlink, msg, ingress_iter, addr_iter, pn_delivery_settled(pnd),
-                                               link_exclusions);
-            }
-        } else {
-            //
-            // This is a targeted link, not anonymous.
-            //
-            const char *term_addr = pn_terminus_get_address(qd_link_remote_target(link));
-            if (!term_addr)
-                term_addr = pn_terminus_get_address(qd_link_source(link));
-
-            if (term_addr) {
-                qd_composed_field_t *to_override = qd_compose_subfield(0);
-                if (tenant_space) {
-                    qd_iterator_t *aiter = qd_iterator_string(term_addr, ITER_VIEW_ADDRESS_WITH_SPACE);
-                    qd_iterator_annotate_space(aiter, tenant_space, tenant_space_len);
-                    qd_compose_insert_string_iterator(to_override, aiter);
-                    qd_iterator_free(aiter);
-                } else
-                    qd_compose_insert_string(to_override, term_addr);
-                qd_message_set_to_override_annotation(msg, to_override);
-                int phase = qdr_link_phase(rlink);
-                if (phase != 0)
-                    qd_message_set_phase_annotation(msg, phase);
-            }
-            delivery = qdr_link_deliver(rlink, msg, ingress_iter, pn_delivery_settled(pnd), link_exclusions);
-        }
-
-        if (delivery) {
-            //
-            // Settle the proton delivery only if all the data has arrived
-            //
-            if (pn_delivery_settled(pnd) && !more) {
-                pn_delivery_settle(pnd);
-            }
-
-            pn_delivery_set_context(pnd, delivery);
-            qdr_delivery_set_context(delivery, pnd);
-
-            qdr_delivery_incref(delivery);
-
-        } else {
-            //
-            // The message is now and will always be unroutable because there is no address.
-            //
-            pn_link_flow(pn_link, 1);
-            pn_delivery_update(pnd, PN_REJECTED);
+        if (pn_delivery_settled(pnd) && !more) {
             pn_delivery_settle(pnd);
-            qd_message_free(msg);
         }
 
+        pn_delivery_set_context(pnd, delivery);
+        printf("delivery is %p\n", (void *)delivery);
+        pn_link_t *link = pn_delivery_link(pnd);
+        printf("link on delivery is %p\n", (void *)link);
+        qdr_delivery_set_context(delivery, pnd);
+
+        qdr_delivery_incref(delivery);
+
+    } else {
         //
-        // Rules for delivering messages:
+        // If there is no delivery, the message is now and will always be unroutable because there is no address.
         //
-        // For addressed (non-anonymous) links:
-        //   to-override must be set (done in the core?)
-        //   uses qdr_link_deliver to hand over to the core
-        //
-        // For anonymous links:
-        //   If there's a to-override in the annotations, use that address
-        //   Or, use the 'to' field in the message properties
-        //
+        qd_message_set_discard(msg, true);
+        pn_link_flow(pn_link, 1);
+        pn_delivery_update(pnd, PN_REJECTED);
+        pn_delivery_settle(pnd);
+        qd_message_free(msg);
     }
 }
 
@@ -489,6 +481,7 @@ static void AMQP_rx_handler(void* context, qd_link_t *link, pn_delivery_t *pnd)
  */
 static void AMQP_disposition_handler(void* context, qd_link_t *link, pn_delivery_t *pnd)
 {
+    printf("In AMQP_disposition_handler\n");
     qd_router_t    *router   = (qd_router_t*) context;
     qdr_delivery_t *delivery = (qdr_delivery_t*) pn_delivery_get_context(pnd);
 
@@ -1049,6 +1042,7 @@ static int CORE_link_push(void *context, qdr_link_t *link, int limit)
         int link_credit = pn_link_credit(plink);
         if (link_credit > limit)
             link_credit = limit;
+
         qdr_link_process_deliveries(router->router_core, link, link_credit);
         return link_credit;
     }
@@ -1077,7 +1071,7 @@ static void CORE_link_deliver(void *context, qdr_link_t *link, qdr_delivery_t *d
     pn_delivery_t *pdlv = pn_link_current(plink);
 
     // handle any delivery-state on the transfer e.g. transactional-state
-    qdr_delivery_write_extension_state(dlv, pdlv, true);
+    //qdr_delivery_write_extension_state(dlv, pdlv, true);
 
     //
     // If the remote send settle mode is set to 'settled', we should settle the delivery on behalf of the receiver.
@@ -1095,9 +1089,11 @@ static void CORE_link_deliver(void *context, qdr_link_t *link, qdr_delivery_t *d
     qd_message_send(qdr_delivery_message(dlv), qlink, qdr_link_strip_annotations_out(link));
 
     //
-    // Settle, call pn_link_advance on the link etc only if the entire message has been received
+    // Settle, call pn_link_advance on the link etc only if the entire message has been received/sent
     //
-    if (!qd_message_more(qdr_delivery_message(dlv))) {
+    if (qdr_delivery_sent(dlv)) {
+
+        printf("qdr_delivery_sent is true\n");
 
         if (!settled && remote_snd_settled) {
             //
@@ -1112,6 +1108,7 @@ static void CORE_link_deliver(void *context, qdr_link_t *link, qdr_delivery_t *d
         //
         // Advance the link since this delivery is complete.
         //
+        printf("Calling pn_link_advance\n");
         pn_link_advance(plink);
     }
 }
@@ -1121,6 +1118,9 @@ static void CORE_delivery_update(void *context, qdr_delivery_t *dlv, uint64_t di
 {
     qd_router_t   *router = (qd_router_t*) context;
     pn_delivery_t *pnd    = (pn_delivery_t*) qdr_delivery_get_context(dlv);
+
+    pn_link_t *link = pn_delivery_link(pnd);
+    printf("CORE_delivery_update link on delivery is %p\n", (void *)link);
 
     if (!pnd)
         return;
@@ -1148,6 +1148,7 @@ static void CORE_delivery_update(void *context, qdr_delivery_t *dlv, uint64_t di
             pn_disposition_set_failed(pn_delivery_local(pnd), true);
 
         qdr_delivery_write_extension_state(dlv, pnd, false);
+
         pn_delivery_update(pnd, disp);
     }
 

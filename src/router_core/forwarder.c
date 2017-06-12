@@ -21,6 +21,7 @@
 #include <qpid/dispatch/amqp.h>
 #include <stdio.h>
 #include <strings.h>
+#include <execinfo.h>
 
 //
 // NOTE: If the in_delivery argument is NULL, the resulting out deliveries
@@ -99,7 +100,7 @@ static void qdr_forward_find_closest_remotes_CT(qdr_core_t *core, qdr_address_t 
 }
 
 
-qdr_delivery_t *qdr_forward_new_delivery_CT(qdr_core_t *core, qdr_delivery_t *in_dlv, qdr_link_t *link, qd_message_t *msg, bool multicast)
+qdr_delivery_t *qdr_forward_new_delivery_CT(qdr_core_t *core, qdr_delivery_t *in_dlv, qdr_link_t *link, qd_message_t *msg)
 {
     qdr_delivery_t *out_dlv = new_qdr_delivery_t();
     uint64_t       *tag = (uint64_t*) out_dlv->tag;
@@ -113,27 +114,63 @@ qdr_delivery_t *qdr_forward_new_delivery_CT(qdr_core_t *core, qdr_delivery_t *in
     *tag            = core->next_tag++;
     out_dlv->tag_length = 8;
     out_dlv->error      = 0;
+    qd_message_add_fanout(msg);
+    if (in_dlv)
+        in_dlv->num_peers++;
+    else
+        return out_dlv;
 
     //
     // Create peer linkage only if the delivery is not settled or if the delivery is not fully received
     //
     if (!out_dlv->settled || qd_message_more(qdr_delivery_message(out_dlv))) {
-        //
-        // If the distribution is multicast, add the peer to the in_dlv->peers since multicast can have multiple peers.
-        //
-        if (multicast) {
-            in_dlv->peer = 0; // Do this just to be safe.
-            DEQ_INSERT_TAIL(in_dlv->peers, out_dlv);
-            out_dlv->peer = in_dlv; // Is this necessary?
-        }
-        else {
-            if (in_dlv && in_dlv->peer == 0) {
-                out_dlv->peer = in_dlv;
-                in_dlv->peer = out_dlv;
+            if (in_dlv->num_peers == 1) {
+                //
+                // One-to-one relationship between in_dlv and out_dlv
+                //
+                out_dlv->peers.peer_list[0] = in_dlv;
+                in_dlv->peers.peer_list[0] = out_dlv;
+                qdr_delivery_incref(out_dlv);
+                qdr_delivery_incref(in_dlv);
             }
+            else if (in_dlv->num_peers > INITIAL_PEER_SIZE) {
+                if (in_dlv->num_peers == INITIAL_PEER_SIZE + 1) {
+                    //
+                    // Say INITIAL_PEER_SIZE = 4 and peers already has 4 elements. We need to add a 5th element
+                    // We will copy the 4 elements from peers into peer_ref_list and this will happen only once
+                    //
+                    qdr_delivery_ref_list_t local_dlv_ref_list;
+                    for (int i=0; i < INITIAL_PEER_SIZE; i++) {
+                        qdr_add_delivery_ref(&local_dlv_ref_list, in_dlv->peers.peer_list[i]);
+                    }
+                    // Zero out the memory to start clean.
+                    memset(in_dlv->peers.peer_list, 0, sizeof(in_dlv->peers.peer_list));
+
+                    // Copy the contents of local_dlv_ref_list to in_dlv->peers.peer_ref_list
+                    DEQ_MOVE(local_dlv_ref_list, in_dlv->peers.peer_ref_list);
+
+                    qdr_add_delivery_ref(&in_dlv->peers.peer_ref_list, out_dlv);
+                }
+                else
+                    qdr_add_delivery_ref(&in_dlv->peers.peer_ref_list, out_dlv);
+
+                qdr_delivery_incref(out_dlv);
         }
-        qdr_delivery_incref(out_dlv);
-        qdr_delivery_incref(in_dlv);
+        else if (in_dlv->num_peers > 1) {
+             //
+             // This seems to be a multicast delivery, add the peer to the in_dlv->peers since multicast can have multiple peers.
+             //
+             in_dlv->peers.peer_list[in_dlv->num_peers-1] = out_dlv;
+             qdr_delivery_incref(out_dlv);
+             out_dlv->peers.peer_list[0] = 0;
+             //
+             // This decref is to counter in the incref on the in_dlv when in_dlv->num_peers == 1
+             //
+             qdr_delivery_decref(core, in_dlv);
+         }
+         else {
+
+         }
     }
 
     return out_dlv;
@@ -178,23 +215,8 @@ static void qdr_forward_drop_presettled_CT_LH(qdr_core_t *core, qdr_link_t *link
     }
 }
 
-
-void qdr_forward_deliver_CT(qdr_core_t *core, qdr_link_t *out_link, qdr_delivery_t *out_dlv)
+void qdr_forward_add_work_delivery_CT(qdr_core_t *core, qdr_link_t *out_link, qdr_delivery_t *out_dlv)
 {
-    sys_mutex_lock(out_link->conn->work_lock);
-
-    //
-    // If the delivery is pre-settled and the outbound link is at or above capacity,
-    // discard all pre-settled deliveries on the undelivered list prior to enqueuing
-    // the new delivery.
-    //
-    if (out_dlv->settled && out_link->capacity > 0 && DEQ_SIZE(out_link->undelivered) >= out_link->capacity)
-        qdr_forward_drop_presettled_CT_LH(core, out_link);
-
-    DEQ_INSERT_TAIL(out_link->undelivered, out_dlv);
-    out_dlv->where = QDR_DELIVERY_IN_UNDELIVERED;
-    qdr_delivery_incref(out_dlv);
-
     //
     // We must put a work item on the link's work list to represent this pending delivery.
     // If there's already a delivery item on the tail of the work list, simply join that item
@@ -212,12 +234,35 @@ void qdr_forward_deliver_CT(qdr_core_t *core, qdr_link_t *out_link, qdr_delivery
         qdr_add_link_ref(&out_link->conn->links_with_work, out_link, QDR_LINK_LIST_CLASS_WORK);
     }
     out_dlv->link_work = work;
+}
+
+
+void qdr_forward_deliver_CT(qdr_core_t *core, qdr_link_t *out_link, qdr_delivery_t *out_dlv)
+{
+    sys_mutex_lock(out_link->conn->work_lock);
+
+    //
+    // If the delivery is pre-settled and the outbound link is at or above capacity,
+    // discard all pre-settled deliveries on the undelivered list prior to enqueuing
+    // the new delivery.
+    //
+    if (out_dlv->settled && out_link->capacity > 0 && DEQ_SIZE(out_link->undelivered) >= out_link->capacity)
+        qdr_forward_drop_presettled_CT_LH(core, out_link);
+
+    DEQ_INSERT_TAIL(out_link->undelivered, out_dlv);
+
+    out_dlv->where = QDR_DELIVERY_IN_UNDELIVERED;
+    qdr_delivery_incref(out_dlv);
+
+    qdr_forward_add_work_delivery_CT(core, out_link, out_dlv);
+
     sys_mutex_unlock(out_link->conn->work_lock);
 
     //
     // Activate the outgoing connection for later processing.
     //
     qdr_connection_activate_CT(core, out_link->conn);
+
 }
 
 
@@ -280,7 +325,7 @@ int qdr_forward_multicast_CT(qdr_core_t      *core,
         qdr_link_ref_t *link_ref = DEQ_HEAD(addr->rlinks);
         while (link_ref) {
             qdr_link_t     *out_link     = link_ref->link;
-            qdr_delivery_t *out_delivery = qdr_forward_new_delivery_CT(core, in_delivery, out_link, msg, true);
+            qdr_delivery_t *out_delivery = qdr_forward_new_delivery_CT(core, in_delivery, out_link, msg);
             qdr_forward_deliver_CT(core, out_link, out_delivery);
             fanout++;
             if (out_link->link_type != QD_LINK_CONTROL && out_link->link_type != QD_LINK_ROUTER)
@@ -353,7 +398,7 @@ int qdr_forward_multicast_CT(qdr_core_t      *core,
                 core->control_links_by_mask_bit[link_bit] :
                 core->data_links_by_mask_bit[link_bit];
             if (dest_link && (!link_exclusion || qd_bitmask_value(link_exclusion, link_bit) == 0)) {
-                qdr_delivery_t *out_delivery = qdr_forward_new_delivery_CT(core, in_delivery, dest_link, msg, true);
+                qdr_delivery_t *out_delivery = qdr_forward_new_delivery_CT(core, in_delivery, dest_link, msg);
                 qdr_forward_deliver_CT(core, dest_link, out_delivery);
                 fanout++;
                 addr->deliveries_transit++;
@@ -425,8 +470,9 @@ int qdr_forward_closest_CT(qdr_core_t      *core,
             // Only if the message was received fully, forward it to the subscribers.
             // The subscribers can only handle full messages.
             //
-            if (!qd_message_more(qdr_delivery_message(in_delivery)))
+            if (!qd_message_more(qdr_delivery_message(in_delivery))) {
                 qdr_forward_on_message_CT(core, sub, in_delivery ? in_delivery->link : 0, msg);
+            }
             else
                 DEQ_INSERT_TAIL(in_delivery->subscriptions, sub);
 
@@ -462,7 +508,7 @@ int qdr_forward_closest_CT(qdr_core_t      *core,
     qdr_link_ref_t *link_ref = DEQ_HEAD(addr->rlinks);
     if (link_ref) {
         out_link     = link_ref->link;
-        out_delivery = qdr_forward_new_delivery_CT(core, in_delivery, out_link, msg, false);
+        out_delivery = qdr_forward_new_delivery_CT(core, in_delivery, out_link, msg);
         qdr_forward_deliver_CT(core, out_link, out_delivery);
 
         //
@@ -505,7 +551,7 @@ int qdr_forward_closest_CT(qdr_core_t      *core,
 
             out_link = control ? PEER_CONTROL_LINK(core, next_node) : PEER_DATA_LINK(core, next_node);
             if (out_link) {
-                out_delivery = qdr_forward_new_delivery_CT(core, in_delivery, out_link, msg, false);
+                out_delivery = qdr_forward_new_delivery_CT(core, in_delivery, out_link, msg);
                 qdr_forward_deliver_CT(core, out_link, out_delivery);
                 addr->deliveries_transit++;
                 return 1;
@@ -651,7 +697,7 @@ int qdr_forward_balanced_CT(qdr_core_t      *core,
     }
 
     if (chosen_link) {
-        qdr_delivery_t *out_delivery = qdr_forward_new_delivery_CT(core, in_delivery, chosen_link, msg, false);
+        qdr_delivery_t *out_delivery = qdr_forward_new_delivery_CT(core, in_delivery, chosen_link, msg);
         qdr_forward_deliver_CT(core, chosen_link, out_delivery);
 
         //

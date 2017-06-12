@@ -26,6 +26,8 @@
 #include <qpid/dispatch/log.h>
 #include <memory.h>
 
+#define INITIAL_PEER_SIZE 8
+
 typedef struct qdr_address_t         qdr_address_t;
 typedef struct qdr_address_config_t  qdr_address_config_t;
 typedef struct qdr_node_t            qdr_node_t;
@@ -317,13 +319,19 @@ struct qdr_subscription_t {
 
 DEQ_DECLARE(qdr_subscription_t, qdr_subscription_list_t);
 
+typedef struct qdr_delivery_ref_t {
+    DEQ_LINKS(struct qdr_delivery_ref_t);
+    qdr_delivery_t *dlv;
+} qdr_delivery_ref_t;
+
+ALLOC_DECLARE(qdr_delivery_ref_t);
+DEQ_DECLARE(qdr_delivery_ref_t, qdr_delivery_ref_list_t);
+
 struct qdr_delivery_t {
     DEQ_LINKS(qdr_delivery_t);
     void                   *context;
-    int                     fanout;
     sys_atomic_t            ref_count;
     qdr_link_t             *link;
-    qdr_delivery_t         *peer;  // Used in non-multicast forwarding cases.
     qd_message_t           *msg;
     qd_iterator_t          *to_addr;
     qd_iterator_t          *origin;
@@ -340,17 +348,13 @@ struct qdr_delivery_t {
     qdr_address_t          *tracking_addr;
     int                     tracking_addr_bit;
     qdr_link_work_t        *link_work;         ///< Delivery work item for this delivery
-    qdr_delivery_list_t     peers;            // A list of peer deliveries used for multicast forwarding cases
     qdr_subscription_list_t subscriptions;
+    int                     num_peers;
+    union {
+        qdr_delivery_t         *peer_list[INITIAL_PEER_SIZE];
+        qdr_delivery_ref_list_t peer_ref_list;
+    } peers;
 };
-
-typedef struct qdr_delivery_ref_t {
-    DEQ_LINKS(struct qdr_delivery_ref_t);
-    qdr_delivery_t *dlv;
-} qdr_delivery_ref_t;
-
-ALLOC_DECLARE(qdr_delivery_ref_t);
-DEQ_DECLARE(qdr_delivery_ref_t, qdr_delivery_ref_list_t);
 
 void qdr_add_delivery_ref(qdr_delivery_ref_list_t *list, qdr_delivery_t *dlv);
 void qdr_del_delivery_ref(qdr_delivery_ref_list_t *list, qdr_delivery_ref_t *ref);
@@ -704,8 +708,9 @@ void qdr_post_link_lost_CT(qdr_core_t *core, int link_maskbit);
 void qdr_post_general_work_CT(qdr_core_t *core, qdr_general_work_t *work);
 void qdr_check_addr_CT(qdr_core_t *core, qdr_address_t *addr, bool was_local);
 
-qdr_delivery_t *qdr_forward_new_delivery_CT(qdr_core_t *core, qdr_delivery_t *peer, qdr_link_t *link, qd_message_t *msg, bool multicast);
+qdr_delivery_t *qdr_forward_new_delivery_CT(qdr_core_t *core, qdr_delivery_t *peer, qdr_link_t *link, qd_message_t *msg);
 void qdr_forward_deliver_CT(qdr_core_t *core, qdr_link_t *link, qdr_delivery_t *dlv);
+void qdr_forward_add_work_delivery_CT(qdr_core_t *core, qdr_link_t *out_link, qdr_delivery_t *out_dlv);
 void qdr_connection_activate_CT(qdr_core_t *core, qdr_connection_t *conn);
 qd_address_treatment_t qdr_treatment_for_address_CT(qdr_core_t *core, qdr_connection_t *conn, qd_iterator_t *iter, int *in_phase, int *out_phase);
 qd_address_treatment_t qdr_treatment_for_address_hash_CT(qdr_core_t *core, qd_iterator_t *iter);

@@ -837,6 +837,22 @@ static qd_field_location_t *qd_message_field_location(qd_message_t *msg, qd_mess
     return 0;
 }
 
+bool qd_message_is_discarded(qd_message_t *msg)
+{
+    if (!msg)
+        return false;
+    qd_message_pvt_t *pvt_msg = (qd_message_pvt_t*) msg;
+    return pvt_msg->content->discard;
+}
+
+void qd_message_set_discard(qd_message_t *msg, bool discard)
+{
+    if (!msg)
+        return;
+
+    qd_message_pvt_t *pvt_msg = (qd_message_pvt_t*) msg;
+    pvt_msg->content->discard = discard;
+}
 
 qd_message_t *qd_message()
 {
@@ -848,15 +864,11 @@ qd_message_t *qd_message()
     DEQ_INIT(msg->ma_to_override);
     DEQ_INIT(msg->ma_trace);
     DEQ_INIT(msg->ma_ingress);
-    msg->more          = true;
     msg->ma_phase      = 0;
-    ZERO(&msg->cursor);
-    /*msg->cursor.buffer = 0;
+    msg->sent_depth    = QD_DEPTH_NONE;
+    msg->cursor.buffer = 0;
     msg->cursor.offset = 0;
-    msg->cursor.length = 0;
-    msg->cursor.hdr_length = 0;
-    msg->cursor.parsed = 0;
-    */
+    msg->all_buffers_sent = false;
 
     msg->content = new_qd_message_content_t();
 
@@ -866,7 +878,9 @@ qd_message_t *qd_message()
     }
 
     ZERO(msg->content);
-    msg->content->lock = sys_mutex();
+    msg->content->more    = true;
+    msg->content->discard = false;
+    msg->content->lock    = sys_mutex();
     sys_atomic_init(&msg->content->ref_count, 1);
     msg->content->parse_depth = QD_DEPTH_NONE;
     msg->content->parsed_message_annotations = 0;
@@ -914,6 +928,7 @@ qd_message_t *qd_message_copy(qd_message_t *in_msg)
     qd_message_content_t *content = msg->content;
     qd_message_pvt_t     *copy    = (qd_message_pvt_t*) new_qd_message_t();
 
+
     if (!copy)
         return 0;
 
@@ -921,9 +936,14 @@ qd_message_t *qd_message_copy(qd_message_t *in_msg)
     qd_buffer_list_clone(&copy->ma_to_override, &msg->ma_to_override);
     qd_buffer_list_clone(&copy->ma_trace, &msg->ma_trace);
     qd_buffer_list_clone(&copy->ma_ingress, &msg->ma_ingress);
-    copy->ma_phase = msg->ma_phase;
 
+    copy->ma_phase = msg->ma_phase;
     copy->content = content;
+    copy->sent_depth    = QD_DEPTH_NONE;
+    copy->cursor.buffer = 0;
+    copy->cursor.offset = 0;
+    copy->all_buffers_sent = false;
+
 
     qd_message_message_annotations((qd_message_t*) copy);
 
@@ -958,6 +978,20 @@ qd_parsed_field_t *qd_message_message_annotations(qd_message_t *in_msg)
     return content->parsed_message_annotations;
 }
 
+size_t qd_message_fanout(qd_message_t *in_msg)
+{
+    if (!in_msg)
+        return 0;
+    qd_message_pvt_t *msg = (qd_message_pvt_t*) in_msg;
+    return msg->content->fanout;
+}
+
+void qd_message_add_fanout(qd_message_t *in_msg)
+{
+    assert(in_msg);
+    qd_message_pvt_t *msg = (qd_message_pvt_t*) in_msg;
+    msg->content->fanout++;
+}
 
 void qd_message_set_trace_annotation(qd_message_t *in_msg, qd_composed_field_t *trace_field)
 {
@@ -995,7 +1029,7 @@ void qd_message_set_ingress_annotation(qd_message_t *in_msg, qd_composed_field_t
     qd_compose_free(ingress_field);
 }
 
-qd_message_t *qd_message_receive(pn_delivery_t *delivery, bool discard)
+qd_message_t *qd_message_receive(pn_delivery_t *delivery)
 {
     pn_link_t        *link = pn_delivery_link(delivery);
     ssize_t           rc;
@@ -1003,16 +1037,14 @@ qd_message_t *qd_message_receive(pn_delivery_t *delivery, bool discard)
 
     pn_record_t *record    = pn_delivery_attachments(delivery);
     qd_message_pvt_t *msg  = (qd_message_pvt_t*) pn_record_get(record, PN_DELIVERY_CTX);
+    bool discard = qd_message_is_discarded((qd_message_t*)msg);
 
     //
     // If there is no message associated with the delivery, this is the first time
     // we've received anything on this delivery.  Allocate a message descriptor and
     // link it and the delivery together.
     //
-    bool first_time = false;
-
     if (!msg) {
-        first_time = true; // this is the first time  we've received anything on this delivery
         msg = (qd_message_pvt_t*) qd_message();
         pn_record_def(record, PN_DELIVERY_CTX, PN_WEAKREF);
         pn_record_set(record, PN_DELIVERY_CTX, (void*) msg);
@@ -1023,21 +1055,19 @@ qd_message_t *qd_message_receive(pn_delivery_t *delivery, bool discard)
     // we will store incoming message data.  If there is no buffer in the message, allocate
     // an empty one and add it to the message.
     //
+    sys_mutex_lock(msg->content->lock);
     buf = DEQ_TAIL(msg->content->buffers);
     if (!buf && !discard) {
         buf = qd_buffer();
         DEQ_INSERT_TAIL(msg->content->buffers, buf);
-        if (first_time) {
-            msg->cursor.buffer = buf;
-            msg->cursor.offset = 0;
-        }
     }
+    sys_mutex_unlock(msg->content->lock);
 
     while (1) {
 
         if (discard) {
             char dummy[buffer_size];
-            rc = pn_link_recv(link, dummy, 512);
+            rc = pn_link_recv(link, dummy, buffer_size);
         }
         else {
             //
@@ -1062,14 +1092,17 @@ qd_message_t *qd_message_receive(pn_delivery_t *delivery, bool discard)
             //
 
             if (buf && qd_buffer_size(buf) == 0) {
+                sys_mutex_lock(msg->content->lock);
                 DEQ_REMOVE_TAIL(msg->content->buffers);
+                sys_mutex_unlock(msg->content->lock);
                 qd_buffer_free(buf);
             }
 
             //
             // We have received the entire message, set the more flag to false
             //
-            msg->more = false;
+            msg->content->more = false;
+            printf("Full message has been received\n");
 
             return (qd_message_t*) msg;
         }
@@ -1078,11 +1111,7 @@ qd_message_t *qd_message_receive(pn_delivery_t *delivery, bool discard)
             //
             // Should the buffer be added to the buffer list or should it be freed?
             //
-            if (discard) {
-                DEQ_REMOVE_TAIL(msg->content->buffers);
-                qd_buffer_free(buf);
-            }
-            else {
+            if (!discard) {
                 //
                 // We have received a positive number of bytes for the message.  Advance
                 // the cursor in the buffer.
@@ -1095,17 +1124,20 @@ qd_message_t *qd_message_receive(pn_delivery_t *delivery, bool discard)
                 //
                 if (qd_buffer_capacity(buf) == 0) {
                     buf = qd_buffer();
+                    sys_mutex_lock(msg->content->lock);
                     DEQ_INSERT_TAIL(msg->content->buffers, buf);
+                    sys_mutex_unlock(msg->content->lock);
                 }
-
             }
-        } else
+
+        } else {
             //
             // We received zero bytes, and no PN_EOS.  This means that we've received
             // all of the data available up to this point, but it does not constitute
             // the entire message.  We'll be back later to finish it up.
             //
             return (qd_message_t*) msg;
+        }
     }
 
     return 0;
@@ -1199,13 +1231,11 @@ void qd_message_send(qd_message_t *in_msg,
                      bool          strip_annotations)
 {
     qd_message_pvt_t     *msg     = (qd_message_pvt_t*) in_msg;
-    qd_message_content_t *content = msg->content;
-    qd_buffer_t          *buf     = DEQ_HEAD(content->buffers); //qd_message_cursor_buffer(msg);
-    //int offset                    = qd_message_cursor_offset(msg);
-    //int buf_capacity              = qd_buffer_capacity(buf);
-    //int buf_size                  = qd_buffer_size(buf);
-    pn_link_t            *pnl     = qd_link_pn(link);
 
+    qd_message_content_t *content = msg->content;
+    qd_buffer_t          *buf     = 0;
+    pn_link_t            *pnl     = qd_link_pn(link);
+    int                  fanout   = qd_message_fanout(in_msg);
 
     //
     // This is the case where the message annotations have been modified.
@@ -1217,90 +1247,116 @@ void qd_message_send(qd_message_t *in_msg,
     // Start by making sure that we've parsed the message sections through
     // the message annotations
     //
-    // ??? NO LONGER NECESSARY???
-    //if (!qd_message_check(in_msg, QD_DEPTH_MESSAGE_ANNOTATIONS)) {
-    //    qd_log(log_source, QD_LOG_ERROR, "Cannot send: %s", qd_error_message);
-    //    return;
-    //}
 
-    //
-    // If the link was link routed, just send out the contents of the buffers, nothing else to do.
-    //
-    /*if (link_route) {
-
-        while (buf) {
-            int buffer_size = qd_buffer_size(buf);
-            int buffer_capacity = qd_buffer_capacity(buf);
-            unsigned char *start  = qd_buffer_advance(buf, offset);
-
-            pn_link_send(pnl, start, buffer_size);
-            buf = DEQ_NEXT(buf);
-            if (buf) {
-                    qd_message_set_cursor(in_msg, buf, 0);
-            }
-            else {
-                   // qd_message_set_cursor_
-            }
-        }
-        return;
-    }*/
-
-    qd_buffer_list_t new_ma;
-    DEQ_INIT(new_ma);
-
-    // Process  the message annotations if any
-    compose_message_annotations(msg, &new_ma, strip_annotations);
-
-    //
-    // Send header if present
-    //
     unsigned char        *cursor;
     cursor = qd_buffer_base(buf);
 
+    if (msg->sent_depth < QD_DEPTH_MESSAGE_ANNOTATIONS) {
+        //
+        // Start with the very first buffer;
+        //
+        buf = DEQ_HEAD(content->buffers);
 
+        //
+        // Send header if present
+        //
+        int header_consume = content->section_message_header.length + content->section_message_header.hdr_length;
+        if (content->section_message_header.length > 0) {
+            buf    = content->section_message_header.buffer;
+            cursor = content->section_message_header.offset + qd_buffer_base(buf);
+            advance(&cursor, &buf, header_consume, send_handler, (void*) pnl);
+        }
 
-    if (content->section_message_header.length > 0) {
-        buf    = content->section_message_header.buffer;
-        cursor = content->section_message_header.offset + qd_buffer_base(buf);
-        advance(&cursor, &buf,
-                content->section_message_header.length + content->section_message_header.hdr_length,
-                send_handler, (void*) pnl);
+        //
+        // Send delivery annotations if present
+        //
+        int da_consume = content->section_delivery_annotation.length + content->section_delivery_annotation.hdr_length;
+        if (content->section_delivery_annotation.length > 0) {
+            buf    = content->section_delivery_annotation.buffer;
+            cursor = content->section_delivery_annotation.offset + qd_buffer_base(buf);
+            advance(&cursor, &buf, da_consume, send_handler, (void*) pnl);
+        }
+
+        qd_buffer_list_t new_ma;
+        DEQ_INIT(new_ma);
+
+        // Process  the message annotations if any
+        compose_message_annotations(msg, &new_ma, strip_annotations);
+
+        //
+        // Send new message annotations
+        //
+        qd_buffer_t *da_buf = DEQ_HEAD(new_ma);
+        while (da_buf) {
+            char *to_send = (char*) qd_buffer_base(da_buf);
+            pn_link_send(pnl, to_send, qd_buffer_size(da_buf));
+            da_buf = DEQ_NEXT(da_buf);
+        }
+        qd_buffer_list_free_buffers(&new_ma);
+
+        //
+        // Skip over replaced message annotations
+        //
+        int ma_consume = content->section_message_annotation.hdr_length + content->section_message_annotation.length;
+        if (content->section_message_annotation.length > 0)
+            advance(&cursor, &buf, ma_consume, 0, 0);
+
+        msg->cursor.buffer = buf;
+
+        //
+        // If there is no header and no delivery annotations and no message annotations, set the offset to 0.
+        //
+        if (header_consume == 0 && da_consume == 0 && ma_consume ==0)
+            msg->cursor.offset = 0;
+        else
+            msg->cursor.offset = cursor - qd_buffer_base(buf);
+
+        msg->sent_depth = QD_DEPTH_MESSAGE_ANNOTATIONS;
     }
 
-    //
-    // Send new message annotations
-    //
-    qd_buffer_t *da_buf = DEQ_HEAD(new_ma);
-    while (da_buf) {
-        char *to_send = (char*) qd_buffer_base(da_buf);
-        pn_link_send(pnl, to_send, qd_buffer_size(da_buf));
-        da_buf = DEQ_NEXT(da_buf);
-    }
-    qd_buffer_list_free_buffers(&new_ma);
-
-    //
-    // Skip over replaced message annotations
-    //
-    if (content->section_message_annotation.length > 0)
-        advance(&cursor, &buf,
-                content->section_message_annotation.hdr_length + content->section_message_annotation.length,
-                0, 0);
-
-    //
-    // Send remaining partial buffer
-    //
-    if (buf) {
-        size_t len = qd_buffer_size(buf) - (cursor - qd_buffer_base(buf));
-        advance(&cursor, &buf, len, send_handler, (void*) pnl);
-    }
-
-    // Fall through to process the remaining buffers normally
-    // Note that 'advance' will have moved us to the next buffer in the chain.
-
+    buf = msg->cursor.buffer;
 
     while (buf) {
-        pn_link_send(pnl, (char*) qd_buffer_base(buf), qd_buffer_size(buf));
-        buf = DEQ_NEXT(buf);
+        size_t buf_size = qd_buffer_size(buf);
+
+        pn_link_send(pnl, (char*) qd_buffer_advance(buf, msg->cursor.offset), buf_size - msg->cursor.offset);
+
+        sys_mutex_lock(msg->content->lock);
+
+        qd_buffer_t *next_buf = DEQ_NEXT(buf);
+        if (next_buf) {
+            // There is a next buffer, the previous buffer has been fully sent by now.
+            qd_buffer_add_fanout(buf);
+            if (fanout == qd_buffer_fanout(buf)) {
+                qd_buffer_t *local_buf = DEQ_HEAD(content->buffers);
+                while (local_buf && local_buf != next_buf) {
+                    DEQ_REMOVE_HEAD(content->buffers);
+                    qd_buffer_free(local_buf);
+                    local_buf = DEQ_HEAD(content->buffers);
+                }
+            }
+            msg->cursor.buffer = next_buf;
+            msg->cursor.offset = 0;
+        }
+        else {
+            if (qd_message_more(in_msg)) { // There is more of the message to come, update your cursor pointers
+                    msg->cursor.buffer = buf;
+                    msg->cursor.offset = buf_size;
+            }
+            else {
+                //
+                // There is no next_buf and there is no more of the message coming, this means
+                // that we have sent out all messages.
+                //
+                msg->all_buffers_sent = true;
+                msg->cursor.buffer = 0;
+                msg->cursor.offset = 0;
+            }
+        }
+
+        sys_mutex_unlock(msg->content->lock);
+
+        buf = next_buf;
     }
 }
 
@@ -1312,7 +1368,6 @@ qd_message_depth_t qd_message_parse_depth(bool link_route, bool anonymous, bool 
         return QD_DEPTH_PROPERTIES;
 
     return QD_DEPTH_MESSAGE_ANNOTATIONS;
-
 }
 
 static int qd_check_field_LH(qd_message_content_t *content,
@@ -1449,9 +1504,22 @@ static bool qd_message_check_LH(qd_message_content_t *content, qd_message_depth_
     return true;
 }
 
-bool qd_message_more(qd_message_t *in_msg) {
+bool qd_message_more(qd_message_t *in_msg)
+{
+    if (!in_msg)
+        return false;
     qd_message_pvt_t     *msg     = (qd_message_pvt_t*) in_msg;
-    return msg->more;
+    return msg->content->more;
+}
+
+
+bool qd_message_sent(qd_message_t *in_msg)
+{
+    if (!in_msg)
+        return false;
+
+    qd_message_pvt_t     *msg     = (qd_message_pvt_t*) in_msg;
+    return msg->all_buffers_sent;
 }
 
 qd_buffer_t *qd_message_cursor_buffer(qd_message_pvt_t *in_msg)
@@ -1559,6 +1627,7 @@ void qd_message_compose_1(qd_message_t *msg, const char *to, qd_buffer_list_t *b
 {
     qd_composed_field_t  *field   = qd_compose(QD_PERFORMATIVE_HEADER, 0);
     qd_message_content_t *content = MSG_CONTENT(msg);
+    content->more = false;
 
     qd_compose_start_list(field);
     qd_compose_insert_bool(field, 0);     // durable
@@ -1606,6 +1675,7 @@ void qd_message_compose_2(qd_message_t *msg, qd_composed_field_t *field)
     qd_buffer_list_t     *field_buffers = qd_compose_buffers(field);
 
     content->buffers = *field_buffers;
+    content->more = false;
     DEQ_INIT(*field_buffers); // Zero out the linkage to the now moved buffers.
 }
 
@@ -1617,6 +1687,7 @@ void qd_message_compose_3(qd_message_t *msg, qd_composed_field_t *field1, qd_com
     qd_buffer_list_t     *field2_buffers = qd_compose_buffers(field2);
 
     content->buffers = *field1_buffers;
+    content->more = false;
     DEQ_INIT(*field1_buffers);
 
     qd_buffer_t *buf = DEQ_HEAD(*field2_buffers);

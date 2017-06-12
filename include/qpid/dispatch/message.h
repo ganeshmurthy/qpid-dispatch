@@ -208,18 +208,29 @@ void qd_message_set_ingress_annotation(qd_message_t *msg, qd_composed_field_t *i
  * fills up on successive calls to this function.
  *
  * @param delivery An incoming delivery from a link
- * @param discard if true the bytes received will be discarded.
  * @return A pointer to the complete message or 0 if the message is not yet complete.
  */
-qd_message_t *qd_message_receive(pn_delivery_t *delivery, bool discard);
+qd_message_t *qd_message_receive(pn_delivery_t *delivery);
 
 /**
  * Send the message outbound on an outgoing link.
+ *
  *
  * @param msg A pointer to a message to be sent.
  * @param link The outgoing link on which to send the message.
  */
 void qd_message_send(qd_message_t *msg, qd_link_t *link, bool strip_outbound_annotations);
+
+/**
+ * Should the message be discarded.
+ * A message can be discarded if the disposition is released or rejected.
+ *  */
+bool qd_message_is_discarded(qd_message_t *msg);
+
+/**
+ *Set the discard field on the message to to the passed in value.
+ */
+void qd_message_set_discard(qd_message_t *msg, bool discard);
 
 /**
  * Check that the message is well-formed up to a certain depth.  Any part of the message that is
@@ -265,6 +276,19 @@ qd_log_source_t* qd_message_log_source();
  * Returns true if only the partial message has been received, if there is more of the message to be come.
  */
 bool qd_message_more(qd_message_t *msg);
+
+bool qd_message_sent(qd_message_t *msg);
+
+/**
+ * Get the number of receivers for this buffer.
+ */
+size_t qd_message_fanout(qd_message_t *msg);
+
+/**
+ * Increase the fanout by 1.
+ */
+void qd_message_add_fanout(qd_message_t *msg);
+
 
 ///@}
 

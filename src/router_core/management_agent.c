@@ -134,10 +134,20 @@ static void qd_set_properties(qd_message_t         *msg,
                               qd_iterator_t       **reply_to,
                               qd_composed_field_t **fld)
 {
+    *fld   = qd_compose(QD_PERFORMATIVE_HEADER, 0);
+
+    qd_compose_start_list(*fld);
+    qd_compose_insert_bool(*fld, 0);     // durable
+    qd_compose_end_list(*fld);
+
+    //
+    // End header, start properties
+    //
+
     qd_iterator_t *correlation_id = qd_message_field_iterator_typed(msg, QD_FIELD_CORRELATION_ID);
     // Grab the reply_to field from the incoming message. This is the address we will send the response to.
     *reply_to = qd_message_field_iterator(msg, QD_FIELD_REPLY_TO);
-    *fld = qd_compose(QD_PERFORMATIVE_PROPERTIES, 0);
+    *fld = qd_compose(QD_PERFORMATIVE_PROPERTIES, *fld);
     qd_compose_start_list(*fld);
     qd_compose_insert_null(*fld);                           // message-id
     qd_compose_insert_null(*fld);                           // user-id

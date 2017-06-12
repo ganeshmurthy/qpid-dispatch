@@ -94,13 +94,19 @@ typedef struct {
     unsigned char       *parse_cursor;
     qd_message_depth_t   parse_depth;
     qd_parsed_field_t   *parsed_message_annotations;
+
+    bool                 discard;                        // Should this message be discarded?
+    bool                 more;                           // true if the message has not been completely received, false otherwise
+    unsigned int         fanout;                         // The number of receivers for this message. This number does not include in-process subscribers.
+
 } qd_message_content_t;
 
 typedef struct {
     DEQ_LINKS(qd_message_t);                // Deque linkage that overlays the qd_message_t
     qd_field_location_t   cursor;           // A pointer to the current location of the byte stream.
-    bool                  more;             // true if the message has not been completely received
     qd_message_depth_t    message_depth;
+    qd_message_depth_t    sent_depth;
+    bool                  all_buffers_sent;
     qd_message_content_t *content;
     qd_buffer_list_t      ma_to_override;  // to field in outgoing message annotations.
     qd_buffer_list_t      ma_trace;        // trace list in outgoing message annotations

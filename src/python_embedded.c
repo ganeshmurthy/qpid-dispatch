@@ -562,6 +562,18 @@ static void IoAdapter_dealloc(IoAdapter* self)
 
 static qd_error_t compose_python_message(qd_composed_field_t **field, PyObject *message,
                                          qd_dispatch_t* qd) {
+
+    *field   = qd_compose(QD_PERFORMATIVE_HEADER, *field);
+
+    qd_compose_start_list(*field);
+    qd_compose_insert_bool(*field, 0);     // durable
+    //qd_compose_insert_null(field);        // priority
+    //qd_compose_insert_null(field);        // ttl
+    //qd_compose_insert_boolean(field, 0);  // first-acquirer
+    //qd_compose_insert_uint(field, 0);     // delivery-count
+    qd_compose_end_list(*field);
+
+
     *field = qd_compose(QD_PERFORMATIVE_PROPERTIES, *field);
     qd_compose_start_list(*field);
     qd_compose_insert_null(*field);                                 // message-id

@@ -670,13 +670,34 @@ static void qdr_link_cleanup_CT(qdr_core_t *core, qdr_connection_t *conn, qdr_li
     qdr_delivery_t *peer;
     while (dlv) {
         DEQ_REMOVE_HEAD(undelivered);
-        peer = dlv->peer;
-        if (peer) {
-            dlv->peer  = 0;
-            peer->peer = 0;
-            qdr_delivery_release_CT(core, peer);
-            qdr_delivery_decref_CT(core, peer);
-            qdr_delivery_decref_CT(core, dlv);
+        if (dlv->num_peers == 1) {
+            peer =  dlv->peers.peer_list[0];
+            if (peer) {
+                qdr_delivery_release_CT(core, peer);
+                qdr_delivery_decref_CT(core, peer);
+                qdr_delivery_decref_CT(core, dlv);
+                dlv->peers.peer_list[0]  = 0;
+                peer->peers.peer_list[0]  = 0;
+            }
+        }
+        else if (dlv->num_peers > INITIAL_PEER_SIZE) {
+            qdr_delivery_ref_t *ref = DEQ_HEAD(dlv->peers.peer_ref_list);
+            peer = ref->dlv;
+            while (ref && peer) {
+                DEQ_REMOVE_HEAD(dlv->peers.peer_ref_list);
+                qdr_delivery_release_CT(core, peer);
+                qdr_delivery_decref_CT(core, peer);
+            }
+        }
+        else {
+            for (int i=0; i < INITIAL_PEER_SIZE; i++) {
+                peer =  dlv->peers.peer_list[i];
+                if (peer) {
+                    qdr_delivery_release_CT(core, peer);
+                    qdr_delivery_decref_CT(core, peer);
+                    peer->peers.peer_list[0]  = 0;
+                }
+            }
         }
 
         //
@@ -712,16 +733,51 @@ static void qdr_link_cleanup_CT(qdr_core_t *core, qdr_connection_t *conn, qdr_li
             dlv->tracking_addr = 0;
         }
 
-        peer = dlv->peer;
+        if (dlv->num_peers == 1) {
+            peer =  dlv->peers.peer_list[0];
+            if (peer) {
+                if (link->link_direction == QD_OUTGOING)
+                   qdr_delivery_failed_CT(core, peer);
+
+                qdr_delivery_decref_CT(core, peer);
+                qdr_delivery_decref_CT(core, dlv);
+                dlv->peers.peer_list[0]  = 0;
+                peer->peers.peer_list[0]  = 0;
+            }
+        }
+        else if (dlv->num_peers > INITIAL_PEER_SIZE) {
+            qdr_delivery_ref_t *ref = DEQ_HEAD(dlv->peers.peer_ref_list);
+            peer = ref->dlv;
+            while (ref && peer) {
+                DEQ_REMOVE_HEAD(dlv->peers.peer_ref_list);
+                if (link->link_direction == QD_OUTGOING)
+                   qdr_delivery_failed_CT(core, peer);
+                qdr_delivery_decref_CT(core, peer);
+            }
+        }
+        else {
+            for (int i=0; i<INITIAL_PEER_SIZE; i++) {
+                peer =  dlv->peers.peer_list[i];
+                if (peer) {
+                    if (link->link_direction == QD_OUTGOING)
+                       qdr_delivery_failed_CT(core, peer);
+                    qdr_delivery_decref_CT(core, peer);
+                    peer->peers.peer_list[0]  = 0;
+                }
+            }
+        }
+
+        /*peer = dlv->peer;
         if (peer) {
             dlv->peer  = 0;
             peer->peer = 0;
+
             if (link->link_direction == QD_OUTGOING)
                 qdr_delivery_failed_CT(core, peer);
 
             qdr_delivery_decref_CT(core, peer);
             qdr_delivery_decref_CT(core, dlv);
-        }
+        }*/
 
         //
         // Account for the lost reference from the Proton delivery
