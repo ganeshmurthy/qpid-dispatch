@@ -54,9 +54,6 @@ install:
 - popd
 
 before_script:
-- pushd qpid-proton
-- echo $(echo "Current proton checkout:") $(git rev-parse HEAD)
-- popd
 - PREFIX=$PWD/install
 - source qpid-proton/build/config.sh
 - mkdir build
@@ -65,6 +62,7 @@ before_script:
 - cmake --build . --target install
 
 script:
+- echo $(echo "Current proton checkout:") $(git rev-parse HEAD)
 - ctest -V
 - popd
 - mvn apache-rat:check
