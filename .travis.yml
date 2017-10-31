@@ -48,6 +48,7 @@ install:
 # Build and install latest proton from source.
 - mkdir qpid-proton/build
 - pushd qpid-proton/build
+- echo $(echo "Current proton checkout:") $(git rev-parse HEAD)
 - export PATH="/usr/bin:$PATH" # Avoid mismatched python interpreters in /opt
 - cmake .. -DCMAKE_INSTALL_PREFIX=$PREFIX -DBUILD_PYTHON=YES -DBUILD_JAVASCRIPT=NO -DBUILD_CPP=NO -DBUILD_GO=NO -DBUILD_RUBY=NO -DBUILD_PHP=NO -DBUILD_PERL=NO 
 - cmake --build . --target install
