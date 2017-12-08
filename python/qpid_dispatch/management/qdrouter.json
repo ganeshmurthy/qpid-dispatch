@@ -518,7 +518,7 @@
                 },      
                 "protocols": {
                     "type": "string",
-                    "description": "This list is a space separated string of the allowed TLS protocols. The current possibilities are TLSv1 TLSv1.1 TLSv1.2. For example, if you want to permit only TLS V.1.1 and TLSv1.2, your value for the protocols would be TLSv1.1 TLSv1.2. If this attribute is not set, then all the TLS protocols are allowed.",
+                    "description": "This list is a space separated string of the allowed TLS protocols. The current possibilities are TLSv1 TLSv1.1 TLSv1.2. For example, if you want to permit only TLS V.1.1 and TLSv1.2, your value for the protocols would be TLSv1.1 TLSv1.2. If this attribute is not set, it defers to the system-wide configuration.",
                     "create": true
                 },                            
                 "certDb": {
