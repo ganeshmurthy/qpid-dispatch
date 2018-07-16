@@ -364,9 +364,6 @@ class RouterTestSslClient(RouterTestSslBase):
         """
         Expects TLSv1.1 and TLSv1.2 only are allowed
         """
-        if not SASL.extended():
-            self.skipTest("Cyrus library not available. skipping test")
-
         self.assertEquals([False, True, True],
                           self.get_allowed_protocols(self.PORT_TLS11_TLS12))
 
