@@ -39,6 +39,7 @@ addons:
     - cyrus-common-2.4
     - openssl
     - libsasl2-2
+    - libc6
     - libssl1.0.0
     - libsasl2-modules
     - libsasl2-modules-sql
