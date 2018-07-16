@@ -58,9 +58,11 @@ addons:
     - lcov
 
 install:
+- cat /etc/*-release
 - PREFIX=$PWD/install
 - git submodule add https://git-wip-us.apache.org/repos/asf/qpid-proton.git
 - git submodule update --init
+-
 
 # Build and install latest proton from source.
 - mkdir qpid-proton/build
