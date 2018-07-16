@@ -314,6 +314,9 @@ class RouterTestSslClient(RouterTestSslBase):
         """
         Expects TLSv1 only is allowed
         """
+        if not SASL.extended():
+            self.skipTest("Cyrus library not available. skipping test")
+
         self.assertEquals([True, False, False],
                           self.get_allowed_protocols(self.PORT_TLS1))
 
@@ -321,6 +324,9 @@ class RouterTestSslClient(RouterTestSslBase):
         """
         Expects TLSv1.1 only is allowed
         """
+        if not SASL.extended():
+            self.skipTest("Cyrus library not available. skipping test")
+
         self.assertEquals([False, True, False],
                           self.get_allowed_protocols(self.PORT_TLS11))
 
@@ -328,6 +334,9 @@ class RouterTestSslClient(RouterTestSslBase):
         """
         Expects TLSv1.2 only is allowed
         """
+        if not SASL.extended():
+            self.skipTest("Cyrus library not available. skipping test")
+
         self.assertEquals([False, False, True],
                           self.get_allowed_protocols(self.PORT_TLS12))
 
@@ -335,6 +344,9 @@ class RouterTestSslClient(RouterTestSslBase):
         """
         Expects TLSv1 and TLSv1.1 only are allowed
         """
+        if not SASL.extended():
+            self.skipTest("Cyrus library not available. skipping test")
+
         self.assertEquals([True, True, False],
                           self.get_allowed_protocols(self.PORT_TLS1_TLS11))
 
@@ -342,6 +354,9 @@ class RouterTestSslClient(RouterTestSslBase):
         """
         Expects TLSv1 and TLSv1.2 only are allowed
         """
+        if not SASL.extended():
+            self.skipTest("Cyrus library not available. skipping test")
+
         self.assertEquals([True, False, True],
                           self.get_allowed_protocols(self.PORT_TLS1_TLS12))
 
@@ -349,6 +364,9 @@ class RouterTestSslClient(RouterTestSslBase):
         """
         Expects TLSv1.1 and TLSv1.2 only are allowed
         """
+        if not SASL.extended():
+            self.skipTest("Cyrus library not available. skipping test")
+
         self.assertEquals([False, True, True],
                           self.get_allowed_protocols(self.PORT_TLS11_TLS12))
 
@@ -356,6 +374,9 @@ class RouterTestSslClient(RouterTestSslBase):
         """
         Expects all supported versions: TLSv1, TLSv1.1 and TLSv1.2 to be allowed
         """
+        if not SASL.extended():
+            self.skipTest("Cyrus library not available. skipping test")
+
         self.assertEquals([True, True, True],
                           self.get_allowed_protocols(self.PORT_TLS_ALL))
 
@@ -363,6 +384,9 @@ class RouterTestSslClient(RouterTestSslBase):
         """
         Expects connection is rejected as SSL is no longer supported
         """
+        if not SASL.extended():
+            self.skipTest("Cyrus library not available. skipping test")
+
         self.assertEqual(False, self.is_proto_allowed(self.PORT_SSL3, 'SSLv3'))
 
     def test_ssl_sasl_client_valid(self):
@@ -371,6 +395,9 @@ class RouterTestSslClient(RouterTestSslBase):
         and forcing the TLS protocol version, which should be accepted by the listener.
         :return:
         """
+        if not SASL.extended():
+            self.skipTest("Cyrus library not available. skipping test")
+
         self.assertTrue(self.is_ssl_sasl_client_accepted(self.PORT_TLS_SASL, "TLSv1"))
         self.assertTrue(self.is_ssl_sasl_client_accepted(self.PORT_TLS_SASL, "TLSv1.2"))
 
@@ -380,6 +407,9 @@ class RouterTestSslClient(RouterTestSslBase):
         and forcing the TLS protocol version, which should be rejected by the listener.
         :return:
         """
+        if not SASL.extended():
+            self.skipTest("Cyrus library not available. skipping test")
+
         self.assertFalse(self.is_ssl_sasl_client_accepted(self.PORT_TLS_SASL, "TLSv1.1"))
 
 
