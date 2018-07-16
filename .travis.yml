@@ -37,7 +37,6 @@ addons:
     - libsasl2-modules-db
     - cyrus-dev-2.4
     - cyrus-common-2.4
-    - cyrus-sasl2
     - openssl
     - libsasl2-2
     - libsasl2-modules
