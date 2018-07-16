@@ -59,6 +59,7 @@ addons:
 
 install:
 - cat /etc/*-release
+- openssl version
 - PREFIX=$PWD/install
 - git submodule add https://git-wip-us.apache.org/repos/asf/qpid-proton.git
 - git submodule update --init
