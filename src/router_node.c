@@ -1390,6 +1390,18 @@ static void CORE_link_detach(void *context, qdr_link_t *link, qdr_error_t *error
     if (!qlink)
         return;
 
+    qdr_connection_t *qdr_conn = qdr_link_get_connection(link);
+    if (!qdr_conn)
+        return;
+
+    qd_connection_t *qconn  = (qd_connection_t*) qdr_connection_get_context(qdr_conn);
+
+    if (!qconn)
+        return;
+
+    if (qconn->closed)
+        return;
+
     pn_link_t *pn_link = qd_link_pn(qlink);
     if (!pn_link)
         return;
@@ -1437,6 +1449,19 @@ static void CORE_link_detach(void *context, qdr_link_t *link, qdr_error_t *error
 
 static void CORE_link_flow(void *context, qdr_link_t *link, int credit)
 {
+
+    qdr_connection_t *qdr_conn = qdr_link_get_connection(link);
+    if (!qdr_conn)
+        return;
+
+    qd_connection_t *qconn  = (qd_connection_t*) qdr_connection_get_context(qdr_conn);
+
+    if (!qconn)
+        return;
+
+    if (qconn->closed)
+        return;
+
     qd_link_t *qlink = (qd_link_t*) qdr_link_get_context(link);
     if (!qlink)
         return;
@@ -1494,6 +1519,18 @@ static int CORE_link_push(void *context, qdr_link_t *link, int limit)
     qd_router_t *router = (qd_router_t*) context;
     qd_link_t   *qlink  = (qd_link_t*) qdr_link_get_context(link);
     if (!qlink)
+        return 0;
+
+    qdr_connection_t *qdr_conn = qdr_link_get_connection(link);
+    if (!qdr_conn)
+        return 0;
+
+    qd_connection_t *qconn  = (qd_connection_t*) qdr_connection_get_context(qdr_conn);
+
+    if (!qconn)
+        return 0;
+
+    if (qconn->closed)
         return 0;
 
     pn_link_t *plink = qd_link_pn(qlink);
@@ -1643,14 +1680,27 @@ static void CORE_delivery_update(void *context, qdr_delivery_t *dlv, uint64_t di
     }
 
     qdr_link_t      *qlink   = qdr_delivery_link(dlv);
+
+    qdr_connection_t *qdr_conn = qdr_link_get_connection(qlink);
+    if (!qdr_conn)
+        return;
+
+    qd_connection_t *qconn  = (qd_connection_t*) qdr_connection_get_context(qdr_conn);
+
+    if (!qconn)
+        return;
+
+    if (qconn->closed)
+        return;
+
+
     qd_link_t       *link    = 0;
     qd_connection_t *qd_conn = 0;
 
     if (qlink) {
         link = (qd_link_t*) qdr_link_get_context(qlink);
         if (link) {
-            qd_conn = qd_link_connection(link);
-            if (qd_conn == 0)
+            if (qconn == 0)
                 return;
         }
         else

@@ -397,6 +397,10 @@ void *qdr_link_get_context(const qdr_link_t *link)
     return link ? link->user_context : 0;
 }
 
+qdr_connection_t *qdr_link_get_connection(const qdr_link_t *link)
+{
+    return link->conn;
+}
 
 qd_link_type_t qdr_link_type(const qdr_link_t *link)
 {

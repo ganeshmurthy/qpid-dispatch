@@ -481,6 +481,8 @@ void qdr_link_set_context(qdr_link_t *link, void *context);
  */
 void *qdr_link_get_context(const qdr_link_t *link);
 
+qdr_connection_t *qdr_link_get_connection(const qdr_link_t *link);
+
 /**
  * qdr_link_type
  *

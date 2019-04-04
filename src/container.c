@@ -276,8 +276,9 @@ static void notify_closed(qd_container_t *container, qd_connection_t *conn, void
     }
 }
 
-static void close_links(qd_container_t *container, pn_connection_t *conn, bool print_log)
+static void close_links(qd_container_t *container, pn_connection_t *conn, qd_connection_t *qd_conn, bool print_log)
 {
+    qd_conn->closed = true;
     pn_link_t *pn_link = pn_link_head(conn, 0);
     while (pn_link) {
         qd_link_t *qd_link = (qd_link_t*) pn_link_get_context(pn_link);
@@ -307,7 +308,7 @@ static int close_handler(qd_container_t *container, pn_connection_t *conn, qd_co
     // Close all links, passing QD_LOST as the reason.  These links are not
     // being properly 'detached'.  They are being orphaned.
     //
-    close_links(container, conn, true);
+    close_links(container, conn, qd_conn, true);
     notify_closed(container, qd_conn, qd_connection_get_context(qd_conn));
     return 0;
 }
@@ -454,11 +455,11 @@ void qd_container_handle_event(qd_container_t *container, pn_event_t *event,
 
     case PN_CONNECTION_REMOTE_CLOSE :
         if (pn_connection_state(conn) == (PN_LOCAL_ACTIVE | PN_REMOTE_CLOSED)) {
-            close_links(container, conn, false);
+            close_links(container, conn, qd_conn, false);
             pn_connection_close(conn);
             qd_conn_event_batch_complete(container, qd_conn, true);
         } else if (pn_connection_state(conn) == (PN_LOCAL_CLOSED | PN_REMOTE_CLOSED)) {
-            close_links(container, conn, false);
+            close_links(container, conn, qd_conn, false);
             notify_closed(container, qd_conn, qd_connection_get_context(qd_conn));
             qd_conn_event_batch_complete(container, qd_conn, true);
         }
