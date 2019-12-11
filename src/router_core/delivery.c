@@ -106,9 +106,9 @@ void qdr_delivery_incref(qdr_delivery_t *delivery, const char *label)
     assert(rc > 0 || !delivery->ref_counted);
     delivery->ref_counted = true;
     qdr_link_t *link = qdr_delivery_link(delivery);
-    if (link)
-        qd_log(link->core->log, QD_LOG_DEBUG,
-               "Delivery incref:    dlv:%lx rc:%"PRIu32" %s", (long) delivery, rc + 1, label);
+    if (link) {
+        qd_log(link->core->log, QD_LOG_DEBUG, "Delivery incref:    dlv:%lx rc:%"PRIu32" link:%lx %s", (long) delivery, rc + 1, link->identity, label);
+    }
 }
 
 
@@ -130,7 +130,12 @@ void qdr_delivery_decref(qdr_core_t *core, qdr_delivery_t *delivery, const char 
 {
     uint32_t ref_count = sys_atomic_dec(&delivery->ref_count);
     assert(ref_count > 0);
-    qd_log(core->log, QD_LOG_DEBUG, "Delivery decref:    dlv:%lx rc:%"PRIu32" %s", (long) delivery, ref_count - 1, label);
+
+    qdr_link_t *link = qdr_delivery_link(delivery);
+
+    if (link) {
+        qd_log(core->log, QD_LOG_DEBUG, "Delivery decref:    dlv:%lx rc:%"PRIu32" link:%lx %s", (long) delivery, ref_count - 1, link->identity, label);
+    }
 
     if (ref_count == 1) {
         //
@@ -372,6 +377,11 @@ void qdr_delivery_increment_counters_CT(qdr_core_t *core, qdr_delivery_t *delive
             if (link->link_direction ==  QD_INCOMING)
                 core->modified_deliveries++;
         }
+
+        if (delivery->presettled)
+            qd_log(core->log, QD_LOG_DEBUG, "Delivery outcome for pre-settled: dlv:%lx link:%lx is %s", (long) delivery,  link->identity, pn_disposition_type_name(outcome));
+        else
+            qd_log(core->log, QD_LOG_DEBUG, "Delivery outcome for: dlv:%lx link:%lx is %s", (long) delivery,  link->identity, pn_disposition_type_name(outcome));
 
         uint32_t delay = core->uptime_ticks - delivery->ingress_time;
         if (delay > 10) {
