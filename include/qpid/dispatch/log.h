@@ -28,13 +28,14 @@
 /** Logging levels */
 typedef enum {
     QD_LOG_NONE     =0x00, ///< No logging
-    QD_LOG_TRACE    =0x01, ///< High volume messages, o(n) or more for n message transfers.
-    QD_LOG_DEBUG    =0x02, ///< Debugging messages useful to developers.
-    QD_LOG_INFO     =0x04, ///< Information messages useful to users
-    QD_LOG_NOTICE   =0x08, ///< Notice of important but non-error events.
-    QD_LOG_WARNING  =0x10, ///< Warning of event that may be a problem.
-    QD_LOG_ERROR    =0x20, ///< Error, definitely a problem
-    QD_LOG_CRITICAL =0x40, ///< Critical error, data loss or process shut-down.
+    QD_LOG_PROTOCOL =0x01, ///< Used exclusively for logging proton's amqp frame trace messages.
+    QD_LOG_TRACE    =0x02, ///< High volume messages, o(n) or more for n message transfers.
+    QD_LOG_DEBUG    =0x04, ///< Debugging messages useful to developers.
+    QD_LOG_INFO     =0x08, ///< Information messages useful to users
+    QD_LOG_NOTICE   =0x10, ///< Notice of important but non-error events.
+    QD_LOG_WARNING  =0x20, ///< Warning of event that may be a problem.
+    QD_LOG_ERROR    =0x40, ///< Error, definitely a problem
+    QD_LOG_CRITICAL =0x80  ///< Critical error, data loss or process shut-down.
 } qd_log_level_t;
 
 typedef struct qd_log_source_t qd_log_source_t;

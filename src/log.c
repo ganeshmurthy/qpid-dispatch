@@ -162,8 +162,8 @@ static log_sink_t* log_sink_lh(const char* name) {
 }
 
 
-typedef enum {DEFAULT, NONE, TRACE, DEBUG, INFO, NOTICE, WARNING, ERROR, CRITICAL, N_LEVELS} level_index_t;
-#define MIN_VALID_LEVEL_INDEX TRACE
+typedef enum {DEFAULT, NONE, PROTOCOL, TRACE, DEBUG, INFO, NOTICE, WARNING, ERROR, CRITICAL, N_LEVELS} level_index_t;
+#define MIN_VALID_LEVEL_INDEX PROTOCOL
 #define MAX_VALID_LEVEL_INDEX CRITICAL
 #define N_LEVEL_INDICES (MAX_VALID_LEVEL_INDEX - MIN_VALID_LEVEL_INDEX + 1)
 #define LEVEL_INDEX(LEVEL) ((LEVEL) - TRACE)
@@ -200,6 +200,7 @@ typedef struct level_t {
 static level_t levels[] = {
     {"default", -1, -1, 0},
     {"none", 0, 0, 0},
+    LEVEL("protocol", QD_LOG_PROTOCOL, LOG_DEBUG),
     LEVEL("trace",    QD_LOG_TRACE, LOG_DEBUG), /* syslog has no trace level */
     LEVEL("debug",    QD_LOG_DEBUG, LOG_DEBUG),
     LEVEL("info",     QD_LOG_INFO, LOG_INFO),
@@ -224,6 +225,7 @@ static const level_t* level_for_bit(int bit) {
 
 /// Return NULL and set qd_error if not a valid level.
 static const level_t* level_for_name(const char *name, int len) {
+
     level_index_t i = 0;
     while (i < N_LEVELS && strncasecmp(levels[i].name, name, len) != 0) ++i;
     if (i == N_LEVELS) {
@@ -245,6 +247,8 @@ static int level_index_for_bit(int bit) {
             return (int) (i - MIN_VALID_LEVEL_INDEX);
         ++ i;
     }
+
+
 
     qd_error(QD_ERROR_CONFIG, "'%d' is not a valid log level bit.", bit);
     return -1;

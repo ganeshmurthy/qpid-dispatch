@@ -105,7 +105,7 @@ static void transport_tracer(pn_transport_t *transport, const char *message)
 {
     qd_connection_t *ctx = (qd_connection_t*) pn_transport_get_context(transport);
     if (ctx)
-        qd_log(ctx->server->log_source, QD_LOG_TRACE, "[%"PRIu64"]:%s", ctx->connection_id, message);
+        qd_log(ctx->server->log_source, QD_LOG_PROTOCOL, "[%"PRIu64"]:%s", ctx->connection_id, message);
 }
 
 
@@ -611,7 +611,7 @@ static void on_connection_bound(qd_server_t *server, pn_event_t *e) {
     // Proton pushes out its trace to transport_tracer() which in turn writes a trace
     // message to the qdrouter log If trace level logging is enabled on the router set
     //
-    if (qd_log_enabled(ctx->server->log_source, QD_LOG_TRACE)) {
+    if (qd_log_enabled(ctx->server->log_source, QD_LOG_TRACE) || qd_log_enabled(ctx->server->log_source, QD_LOG_PROTOCOL)) {
         pn_transport_trace(tport, PN_TRACE_FRM);
         pn_transport_set_tracer(tport, transport_tracer);
     }
