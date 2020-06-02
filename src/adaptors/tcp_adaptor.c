@@ -790,6 +790,7 @@ static void qdr_tcp_adaptor_final(void *adaptor_context)
     free(adaptor);
     tcp_adaptor =  NULL;
 }
+//
 
 /**
  * Declare the adaptor so that it will self-register on process startup.
