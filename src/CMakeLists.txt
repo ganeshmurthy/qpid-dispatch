@@ -40,6 +40,7 @@ add_custom_command (
 set(qpid_dispatch_SOURCES
   adaptors/reference_adaptor.c
   adaptors/tcp_adaptor.c
+  adaptors/http_adaptor.c
   alloc_pool.c
   amqp.c
   bitmask.c
