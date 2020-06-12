@@ -211,6 +211,7 @@ static void handle_incoming_http(qdr_http_connection_t *conn, pn_raw_buffer_t ra
 
     }
     nghttp2_session_callbacks_new(&callbacks);
+    nghttp2_session_callbacks_del(callbacks);
 }
 
 

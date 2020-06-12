@@ -24,10 +24,24 @@
 
 find_library(NGHTTP2_LIBRARIES
   NAMES libnghttp2
-  )
+  REQUIRED
+)
+
+find_path(NGHTTP2_INCLUDE_DIRS
+  NAMES nghttp2.h
+  HINTS "${LIBWEBSOCKETS_INCLUDEDIR}" "${LIBWEBSOCKETS_ROOT}/include" "${CMAKE_INSTALL_PREFIX}/include"
+  PATHS "/usr/include/nghttp2"
+)
+
+include(FindPackageHandleStandardArgs)
+  find_package_handle_standard_args(
+    libnghttp2 DEFAULT_MSG NGHTTP2_LIBRARIES NGHTTP2_INCLUDE_DIRS)
+
+
 
 
 message(STATUS "********************")
 message(STATUS "${NGHTTP2_LIBRARIES}"  )
+message(STATUS "${NGHTTP2_INCLUDE_DIRS}"  )
 message(STATUS "********************")
 
