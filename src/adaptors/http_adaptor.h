@@ -22,15 +22,19 @@
 #include <qpid/dispatch/alloc.h>
 #include <qpid/dispatch/ctools.h>
 #include <qpid/dispatch/log.h>
-
+#include <nghttp2/nghttp2.h>
 
 // We already have a qd_http_listener_t defined in http-libwebsockets.c
 // We will call this as qd_http_lsnr_t in order to avoid a clash.
 // At a later point in time, we will handle websocket here as well
 // and get rid of http-libwebsockets.c and rename this as qd_http_listener_t
-typedef struct qd_http_lsnr_t     qd_http_lsnr_t;
+typedef struct qd_http_lsnr_t          qd_http_lsnr_t;
 typedef struct qd_http_connector_t     qd_http_connector_t;
-typedef struct qd_bridge_config_t qd_bridge_config_t;
+typedef struct qd_http2_session_data_t qd_http2_session_data_t;
+typedef struct qd_bridge_config_t      qd_bridge_config_t;
+typedef struct qd_http2_stream_data_t  qd_http2_stream_data_t;
+typedef struct qdr_http_connection_t  qdr_http_connection_t;
+//typedef struct qd_http2_user_context_t  qd_http2_user_context_t;
 
 struct qd_bridge_config_t {
     char *name;
@@ -49,8 +53,7 @@ struct qd_http_lsnr_t {
     DEQ_LINKS(qd_http_lsnr_t);
 };
 
-struct qd_http_connector_t
-{
+struct qd_http_connector_t {
     sys_atomic_t              ref_count;
     qd_server_t              *server;
     qd_bridge_config_t        config;
@@ -60,9 +63,64 @@ struct qd_http_connector_t
     DEQ_LINKS(qd_http_connector_t);
 };
 
+struct qd_http2_stream_data_t {
+    char *request_path;
+    int32_t stream_id;
+
+    //Client data
+    const char *uri; // The NULL-terminated URI string to retrieve.
+    /* The authority portion of the |uri|, not NULL-terminated */
+    char *authority;
+    /* The path portion of the |uri|, including query, not NULL-terminated */
+    char *path;
+    /* The length of the |authority| */
+    size_t authoritylen;
+    /* The length of the |path| */
+    size_t pathlen;
+    DEQ_LINKS(qd_http2_stream_data_t);
+};
+
+struct qdr_http_connection_t {
+    qd_handler_context_t  context;
+    char                 *reply_to;
+    qdr_connection_t     *qdr_conn;
+    qdr_link_t           *in_link;
+    qdr_link_t           *out_link;
+    uint64_t              incoming_id;
+    uint64_t              outgoing_id;
+    pn_raw_connection_t  *pn_raw_conn;
+    pn_raw_buffer_t       read_buffers[4];
+    qdr_delivery_t       *in_dlv;
+    qdr_delivery_t       *out_dlv;
+    bool                  ingress;
+    qd_timer_t           *activate_timer;
+    qd_bridge_config_t   *config;
+    qd_server_t          *server;
+    qd_http2_session_data_t *session_data;
+};
+
+//struct qd_http2_user_context_t {
+//    qd_message_t *message;
+//};
+
+
+
 
 DEQ_DECLARE(qd_http_lsnr_t, qd_http_lsnr_list_t);
 ALLOC_DECLARE(qd_http_lsnr_t);
-
-DEQ_DECLARE(qd_http_connector_t, qd_http_connector_list_t);
+ALLOC_DECLARE(qd_http2_session_data_t);
 ALLOC_DECLARE(qd_http_connector_t);
+ALLOC_DECLARE(qd_http2_stream_data_t);
+DEQ_DECLARE(qd_http_connector_t, qd_http_connector_list_t);
+DEQ_DECLARE(qd_http2_stream_data_t, qd_http2_stream_data_list_t);
+
+struct qd_http2_session_data_t {
+    bool                         is_request;  // true if this session data object is used for a request, false means response session_data
+    qd_http2_stream_data_list_t  streams;
+    qd_message_t                *message;
+    nghttp2_session             *session;
+    char                        *client_addr;
+    char                        *path;   // This field is mapped to the 'to' field of AMQP
+    char                        *method; // HTTP method - GET, POST, HEAD etc.
+    qdr_http_connection_t       *conn;
+};

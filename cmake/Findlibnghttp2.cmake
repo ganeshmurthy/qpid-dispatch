@@ -17,13 +17,8 @@
 # under the License.
 #
 
-#find_library(NGHTTP2
-#  NAMES libnghttp2 nghttp2
-#  REQUIRED
-#)
-
 find_library(NGHTTP2_LIBRARIES
-  NAMES libnghttp2
+  NAMES libnghttp2 nghttp2
   REQUIRED
 )
 
@@ -38,10 +33,4 @@ include(FindPackageHandleStandardArgs)
     libnghttp2 DEFAULT_MSG NGHTTP2_LIBRARIES NGHTTP2_INCLUDE_DIRS)
 
 
-
-
-message(STATUS "********************")
-message(STATUS "${NGHTTP2_LIBRARIES}"  )
-message(STATUS "${NGHTTP2_INCLUDE_DIRS}"  )
-message(STATUS "********************")
 
