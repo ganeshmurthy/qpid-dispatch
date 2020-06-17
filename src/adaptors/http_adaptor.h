@@ -18,6 +18,7 @@
  */
 #include <qpid/dispatch/server.h>
 #include <qpid/dispatch/threading.h>
+#include <qpid/dispatch/compose.h>
 #include <qpid/dispatch/atomic.h>
 #include <qpid/dispatch/alloc.h>
 #include <qpid/dispatch/ctools.h>
@@ -96,7 +97,9 @@ struct qdr_http_connection_t {
     qd_timer_t           *activate_timer;
     qd_bridge_config_t   *config;
     qd_server_t          *server;
+    uint64_t              conn_id;
     qd_http2_session_data_t *session_data;
+    char                 *remote_address;
 };
 
 //struct qd_http2_user_context_t {
@@ -115,12 +118,26 @@ DEQ_DECLARE(qd_http_connector_t, qd_http_connector_list_t);
 DEQ_DECLARE(qd_http2_stream_data_t, qd_http2_stream_data_list_t);
 
 struct qd_http2_session_data_t {
-    bool                         is_request;  // true if this session data object is used for a request, false means response session_data
     qd_http2_stream_data_list_t  streams;
+
+    qd_http2_stream_data_t      *stream_data; // This field is temporary. We will remove it.
     qd_message_t                *message;
     nghttp2_session             *session;
     char                        *client_addr;
     char                        *path;   // This field is mapped to the 'to' field of AMQP
     char                        *method; // HTTP method - GET, POST, HEAD etc.
+    char                        *content_type; //content_type.
+    char                        *content_encoding;
     qdr_http_connection_t       *conn;
+
+    //Might need to create a request data field and move these there
+    qd_composed_field_t         *header_properties;  // This has the header and the properties.
+    qd_composed_field_t         *app_properties;     // This has the application properties.
+
+    // A linked list of buffers that contain data that need to be written outbound
+    qd_buffer_list_t             out_buffs;
+    qd_iterator_pointer_t        cursor;
+    qd_iterator_pointer_t        sent_cursor;
+
+
 };
