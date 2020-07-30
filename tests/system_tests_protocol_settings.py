@@ -32,7 +32,11 @@ skip_test = True
 # Dont skip tests on 64 bit architectures.
 p = subprocess.Popen("uname -m", shell=True, stdout=subprocess.PIPE,
                      universal_newlines=True)
-if X86_64_ARCH in p.communicate()[0]:
+out = p.communicate()[0]
+print ("**********************")
+print (out)
+print ("**********************")
+if X86_64_ARCH in out:
     skip_test = False
 
 
@@ -340,6 +344,7 @@ class ConnectorSettingsDefaultTest(TestCase):
             self.assertTrue(' channel-max=32767,' in open_lines[0])
             begin_lines = [s for s in log_lines if "<- @begin" in s]
             # defaults
+            print (begin_lines[0])
             self.assertTrue(" incoming-window=2147483647," in begin_lines[0])
 
 
