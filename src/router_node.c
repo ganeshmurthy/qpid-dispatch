@@ -1992,6 +1992,9 @@ void qd_router_free(qd_router_t *router)
 {
     if (!router) return;
 
+    router->router_id = 0;
+    router->router_area = 0;
+
     qd_container_set_default_node_type(router->qd, 0, 0, QD_DIST_BOTH);
 
     qdr_core_free(router->router_core);
