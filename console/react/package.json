@@ -60,7 +60,7 @@
     "@react-mock/localstorage": "^0.1.2",
     "@testing-library/jest-dom": "^5.11.3",
     "@testing-library/react": "^10.4.8",
-    "@types/jest": "^26.0.10",
+    "@types/jest": "^26.0.14",
     "body-parser": "^1.19.0",
     "browserslist": "^4.14.0",
     "jest-axe": "^3.5.0",
