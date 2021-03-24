@@ -92,8 +92,9 @@ class GrpcServiceMethodsTest(TestCase):
 
         # Run the gRPC server (see friendship.proto for more info)
         cls.grpc_server = fs.serve(cls.grpc_server_port,
-                                   options=(('grpc.http2.max_ping_strikes',
-                                             0),))
+                                   options=(('grpc.http2.max_ping_strikes', 100),
+                                            ('"grpc.http2.max_pings_without_data', 100),
+                                            ))
 
         # Prepare router to communicate with the gRPC server
         cls.connector_props = {
@@ -117,8 +118,7 @@ class GrpcServiceMethodsTest(TestCase):
         # If you wanna try it without the router, set the grpc_channel
         # directly to the grpc_server_port
         cls.grpc_channel = grpc.insecure_channel('127.0.0.1:%s' %
-                                                 cls.router_http_port,
-                                                 options=(('grpc.http2.max_ping_strikes', 0),))
+                                                 cls.router_http_port)
         cls.grpc_stub = FriendshipStub(cls.grpc_channel)
 
     @classmethod
