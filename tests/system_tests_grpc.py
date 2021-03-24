@@ -94,6 +94,7 @@ class GrpcServiceMethodsTest(TestCase):
         cls.grpc_server = fs.serve(cls.grpc_server_port,
                                    options=(('grpc.http2.max_ping_strikes', 100),
                                             ('grpc.http2.max_pings_without_data', 100),
+                                            ('grpc.keepalive_permit_without_calls', True),
                                             ))
 
         # Prepare router to communicate with the gRPC server
