@@ -523,7 +523,8 @@ const char *qdr_link_internal_address(const qdr_link_t *link)
 
 bool qdr_link_is_anonymous(const qdr_link_t *link)
 {
-    return link->owning_addr == 0;
+    qdr_address_t *owning_addr = safe_deref_qdr_address_t(link->owning_addr_sp);
+    return owning_addr == 0;
 }
 
 
@@ -1030,10 +1031,11 @@ static void qdr_link_cleanup_CT(qdr_core_t *core, qdr_connection_t *conn, qdr_li
     sys_mutex_unlock(conn->work_lock);
 
     if (link->ref[QDR_LINK_LIST_CLASS_ADDRESS]) {
-        assert(link->owning_addr);
+        qdr_address_t *owning_addr = safe_deref_qdr_address_t(link->owning_addr_sp);
+        assert(owning_addr);
         qdr_del_link_ref((link->link_direction == QD_OUTGOING)
-                         ? &link->owning_addr->rlinks
-                         : &link->owning_addr->inlinks,
+                         ? &owning_addr->rlinks
+                         : &owning_addr->inlinks,
                          link,  QDR_LINK_LIST_CLASS_ADDRESS);
     }
 
@@ -1551,7 +1553,7 @@ static void qdr_connection_closed_CT(qdr_core_t *core, qdr_action_t *action, boo
 static void qdr_attach_link_control_CT(qdr_core_t *core, qdr_connection_t *conn, qdr_link_t *link)
 {
     if (conn->role == QDR_ROLE_INTER_ROUTER) {
-        link->owning_addr = core->hello_addr;
+        set_safe_ptr_qdr_address_t(core->hello_addr, &link->owning_addr_sp);
         qdr_add_link_ref(&core->hello_addr->rlinks, link, QDR_LINK_LIST_CLASS_ADDRESS);
         core->control_links_by_mask_bit[conn->mask_bit] = link;
     }
@@ -1562,7 +1564,7 @@ static void qdr_detach_link_control_CT(qdr_core_t *core, qdr_connection_t *conn,
 {
     if (conn->role == QDR_ROLE_INTER_ROUTER) {
         qdr_del_link_ref(&core->hello_addr->rlinks, link, QDR_LINK_LIST_CLASS_ADDRESS);
-        link->owning_addr = 0;
+        qd_nullify_safe_ptr(&link->owning_addr_sp);
         core->control_links_by_mask_bit[conn->mask_bit] = 0;
         qdr_post_link_lost_CT(core, conn->mask_bit);
     }
@@ -1746,7 +1748,7 @@ static void qdr_link_inbound_first_attach_CT(qdr_core_t *core, qdr_action_t *act
         switch (link->link_type) {
         case QD_LINK_ENDPOINT: {
             if (qdr_terminus_is_anonymous(target)) {
-                link->owning_addr = 0;
+                qd_nullify_safe_ptr(&link->owning_addr_sp);
                 qdr_link_outbound_second_attach_CT(core, link, source, target);
                 qdr_link_issue_credit_CT(core, link, link->capacity, false);
 
@@ -1885,7 +1887,7 @@ static void qdr_link_inbound_second_attach_CT(qdr_core_t *core, qdr_action_t *ac
             //
             // Issue credit if this is an anonymous link or if its address has at least one reachable destination.
             //
-            qdr_address_t *addr = link->owning_addr;
+            qdr_address_t *addr = safe_deref_qdr_address_t(link->owning_addr_sp);
             if (!addr || (DEQ_SIZE(addr->subscriptions) || DEQ_SIZE(addr->rlinks) || qd_bitmask_cardinality(addr->rnodes)
                           || (!!addr->fallback && (DEQ_SIZE(addr->fallback->subscriptions)
                                                     || DEQ_SIZE(addr->fallback->rlinks)
@@ -1949,7 +1951,7 @@ static void qdr_link_inbound_detach_CT(qdr_core_t *core, qdr_action_t *action, b
         return;
     }
 
-    qdr_address_t *addr = link->owning_addr;
+    qdr_address_t *addr = safe_deref_qdr_address_t(link->owning_addr_sp);
 
     if (link->detach_received)
         return;
@@ -2080,7 +2082,7 @@ static void qdr_link_inbound_detach_CT(qdr_core_t *core, qdr_action_t *action, b
         }
     }
 
-    link->owning_addr = 0;
+    qd_nullify_safe_ptr(&link->owning_addr_sp);
 
     if (link->detach_count == 1) {
         //

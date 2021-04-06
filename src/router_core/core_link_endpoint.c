@@ -182,8 +182,7 @@ void qdrc_endpoint_do_bound_attach_CT(qdr_core_t *core, qdr_address_t *addr, qdr
     ep->link = link;
 
     link->core_endpoint = ep;
-    link->owning_addr   = addr;
-
+    set_safe_ptr_qdr_address_t(addr, &link->owning_addr_sp);
     ep->desc->on_first_attach(addr->core_endpoint_context, ep, &ep->link_context, source, target);
 }
 

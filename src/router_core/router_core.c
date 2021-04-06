@@ -257,11 +257,16 @@ void qdr_core_free(qdr_core_t *core)
     qdr_connection_t *conn = DEQ_HEAD(core->open_connections);
     while (conn) {
         DEQ_REMOVE_HEAD(core->open_connections);
-
         if (conn->conn_id) {
             qdr_del_connection_ref(&conn->conn_id->connection_refs, conn);
             qdr_route_check_id_for_deletion_CT(core, conn->conn_id);
         }
+
+        if (conn->alt_conn_id) {
+            qdr_del_connection_ref(&conn->alt_conn_id->connection_refs, conn);
+            qdr_route_check_id_for_deletion_CT(core, conn->alt_conn_id);
+        }
+
 
         qdr_connection_work_t *work = DEQ_HEAD(conn->work_list);
         while (work) {
@@ -274,7 +279,6 @@ void qdr_core_free(qdr_core_t *core)
             assert(DEQ_IS_EMPTY(conn->streaming_link_pool));  // all links have been released
             qdr_del_connection_ref(&core->streaming_connections, conn);
         }
-
         qdr_connection_free(conn);
         conn = DEQ_HEAD(core->open_connections);
     }
@@ -292,7 +296,6 @@ void qdr_core_free(qdr_core_t *core)
     if (core->data_links_by_mask_bit)    free(core->data_links_by_mask_bit);
     if (core->neighbor_free_mask)        qd_bitmask_free(core->neighbor_free_mask);
     if (core->rnode_conns_by_mask_bit)   free(core->rnode_conns_by_mask_bit);
-
     free(core);
 }
 
@@ -595,8 +598,9 @@ void qdr_core_remove_address(qdr_core_t *core, qdr_address_t *addr)
     qdr_link_ref_t *lref = DEQ_HEAD(addr->rlinks);
     while (lref) {
         qdr_link_t *link = lref->link;
-        assert(link->owning_addr == addr);
-        link->owning_addr = 0;
+        qdr_address_t *owning_addr = safe_deref_qdr_address_t(link->owning_addr_sp);
+        assert(owning_addr == addr);
+        qd_nullify_safe_ptr(&link->owning_addr_sp);
         qdr_del_link_ref(&addr->rlinks, link, QDR_LINK_LIST_CLASS_ADDRESS);
         lref = DEQ_HEAD(addr->rlinks);
     }
@@ -632,7 +636,8 @@ void qdr_core_remove_address(qdr_core_t *core, qdr_address_t *addr)
 void qdr_core_bind_address_link_CT(qdr_core_t *core, qdr_address_t *addr, qdr_link_t *link)
 {
     const char *key = (const char*) qd_hash_key_by_handle(addr->hash_handle);
-    link->owning_addr = addr;
+
+    set_safe_ptr_qdr_address_t(addr, &link->owning_addr_sp);
     if (key && (*key == QD_ITER_HASH_PREFIX_MOBILE))
         link->phase = (int) (key[1] - '0');
 
@@ -673,7 +678,7 @@ void qdr_core_bind_address_link_CT(qdr_core_t *core, qdr_address_t *addr, qdr_li
 
 void qdr_core_unbind_address_link_CT(qdr_core_t *core, qdr_address_t *addr, qdr_link_t *link)
 {
-    link->owning_addr = 0;
+    qd_nullify_safe_ptr(&link->owning_addr_sp);
 
     //
     // If the link is configured as no_route, there will be no further link/address

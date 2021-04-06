@@ -141,9 +141,10 @@ static void qdr_agent_write_column_CT(qdr_core_t *core, qd_composed_field_t *bod
         qd_compose_insert_string(body, link->link_direction == QD_INCOMING ? "in" : "out");
         break;
 
-    case QDR_LINK_OWNING_ADDR:
-        if(link->owning_addr)
-            qd_compose_insert_string(body, address_key(link->owning_addr));
+    case QDR_LINK_OWNING_ADDR: {
+        qdr_address_t *owning_addr = safe_deref_qdr_address_t(link->owning_addr_sp);
+        if(owning_addr)
+            qd_compose_insert_string(body, address_key(owning_addr));
         else if (link->connected_link && link->connected_link->terminus_addr)
             qd_compose_insert_string(body, link->connected_link->terminus_addr);
         else if (link->terminus_addr)
@@ -151,6 +152,7 @@ static void qdr_agent_write_column_CT(qdr_core_t *core, qd_composed_field_t *bod
         else
             qd_compose_insert_null(body);
         break;
+    }
 
     case QDR_LINK_CAPACITY:
         qd_compose_insert_uint(body, link->capacity);
@@ -312,7 +314,6 @@ static void qdr_manage_advance_link_CT(qdr_query_t *query, qdr_link_t *link)
     link = DEQ_NEXT(link);
     if (link) {
         query->more     = true;
-        //query->next_key = qdr_field((const char*) qd_hash_key_by_handle(link->owning_addr->hash_handle));
     } else
         query->more = false;
 }

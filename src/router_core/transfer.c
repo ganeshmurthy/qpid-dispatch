@@ -522,8 +522,10 @@ static void qdr_link_forward_CT(qdr_core_t *core, qdr_link_t *link, qdr_delivery
     if (dlv_link->link_type == QD_LINK_ENDPOINT && !dlv_link->fallback)
         core->deliveries_ingress++;
 
+    qdr_address_t *owning_addr = safe_deref_qdr_address_t(link->owning_addr_sp);
+
     if (addr
-        && addr == link->owning_addr
+        && addr == owning_addr
         && qdr_addr_path_count_CT(addr) == 0
         && (link->fallback || qdr_addr_path_count_CT(addr->fallback) == 0)) {
         //
@@ -636,7 +638,7 @@ static void qdr_link_forward_CT(qdr_core_t *core, qdr_link_t *link, qdr_delivery
     // If the anonymous delivery could not be sent anywhere (fanout = 0) and it is not multicasted, try sending it over
     // the anonymous link.
     //
-    if (fanout == 0 && !dlv->multicast && link->owning_addr == 0 && dlv->to_addr != 0) {
+    if (fanout == 0 && !dlv->multicast && owning_addr == 0 && dlv->to_addr != 0) {
         if (core->edge_conn_addr && link->conn->role != QDR_ROLE_EDGE_CONNECTION) {
             qdr_address_t *sender_address = core->edge_conn_addr(core->edge_context);
             if (sender_address && sender_address != addr)
@@ -803,7 +805,7 @@ static void qdr_link_deliver_CT(qdr_core_t *core, qdr_action_t *action, bool dis
 
     if (DEQ_IS_EMPTY(link->undelivered)) {
         qdr_link_ref_t *temp_rlink = 0;
-        qdr_address_t *addr = link->owning_addr;
+        qdr_address_t *addr = safe_deref_qdr_address_t(link->owning_addr_sp);
         if (!addr && dlv->to_addr) {
             qdr_connection_t *conn = link->conn;
             if (conn && conn->tenant_space)

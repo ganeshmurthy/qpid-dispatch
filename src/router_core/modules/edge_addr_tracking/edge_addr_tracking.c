@@ -337,7 +337,7 @@ static void on_link_event(void *context, qdrc_event_t event, qdr_link_t *link)
         case QDRC_EVENT_LINK_EDGE_DATA_ATTACHED :
         {
             qdr_addr_tracking_module_context_t *mc = (qdr_addr_tracking_module_context_t *) context;
-            qdr_address_t *addr = link->owning_addr;
+            qdr_address_t *addr = safe_deref_qdr_address_t(link->owning_addr_sp);
             if (addr && qdr_address_is_mobile_CT(addr) && DEQ_SIZE(addr->subscriptions) == 0 && link->link_direction == QD_INCOMING) {
                 qdr_addr_endpoint_state_t *endpoint_state = qdrc_get_endpoint_state_for_connection(mc->endpoint_state_list, link->conn);
                 // Fix for DISPATCH-1492. Remove the assert(endpoint_state); and add an if condition check for endpoint_state
