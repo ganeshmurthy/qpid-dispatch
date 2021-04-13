@@ -611,6 +611,7 @@ void qdr_core_remove_address(qdr_core_t *core, qdr_address_t *addr)
     }
     else if (addr->treatment == QD_TREATMENT_ANYCAST_BALANCED) {
         free(addr->outstanding_deliveries);
+        addr->outstanding_deliveries = (int *)1;
     }
 
     qdr_connection_ref_t *cr = DEQ_HEAD(addr->conns);
