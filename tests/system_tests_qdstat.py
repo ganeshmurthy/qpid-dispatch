@@ -661,7 +661,7 @@ class QdstatLinkPriorityTest(system_test.TestCase):
 
     def _test_all_entities(self, command):
         out = self.run_qdstat(command)
-
+        print (out)
         self.assertTrue(out.count('UTC') == 1)
         self.assertTrue(out.count('Router Links') == 1)
         self.assertTrue(out.count('Router Addresses') == 1)
