@@ -573,10 +573,6 @@ void qd_connection_invoke_deferred(qd_connection_t *conn, qd_deferred_t call, vo
  */
 bool qd_listener_listen(qd_listener_t *l);
 
-/**
- * Initiate an outgoing connection. Returns true if successful.
- */
-bool qd_connector_connect(qd_connector_t *ct);
 
 /**
  * Store address of display name service py object for C code use
