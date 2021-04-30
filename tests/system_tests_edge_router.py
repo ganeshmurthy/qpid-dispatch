@@ -2504,6 +2504,7 @@ class MobileAddressMulticastTest(MessagingHandler):
         self.n_rcvd1 = 0
         self.n_rcvd2 = 0
         self.n_rcvd3 = 0
+        self.n_released = 0
         self.n_sent = 0
         self.n_settled = 0
         self.n_released = 0
@@ -2533,8 +2534,11 @@ class MobileAddressMulticastTest(MessagingHandler):
             self.check_addr_host = self.sender_host
 
         if self.large_msg:
-            self.body = "0123456789101112131415" * 10000
-            self.properties = {'big field': 'X' * 32000}
+            self.body = "0123456789101112131415" * 1000
+            self.properties = {'big field': 'X' * 3200}
+
+    def on_released(self, event):
+        self.n_released += 1
 
     def timeout(self):
         if self.dup_msg:
@@ -2542,10 +2546,10 @@ class MobileAddressMulticastTest(MessagingHandler):
                          (self.receiver_name, self.dup_msg)
         else:
             if not self.error:
-                self.error = "Timeout Expired - n_sent=%d n_rcvd1=%d " \
-                             "n_rcvd2=%d n_rcvd3=%d addr=%s" % \
+                self.error = "Timeout Expired - n_sent=%d, n_rcvd1=%d, " \
+                             "n_rcvd2=%d, n_rcvd3=%d, n_released=%d, addr=%s" % \
                              (self.n_sent, self.n_rcvd1, self.n_rcvd2,
-                              self.n_rcvd3, self.address)
+                              self.n_rcvd3, self.n_released, self.address)
         self.receiver1_conn.close()
         self.receiver2_conn.close()
         self.receiver3_conn.close()
@@ -2617,7 +2621,7 @@ class MobileAddressMulticastTest(MessagingHandler):
                 self.addr_timer = self.reactor.schedule(1.0, AddrTimer(self))
 
     def on_sendable(self, event):
-        while self.n_sent < self.count:
+        if self.n_sent < self.count:
             msg = None
             if self.large_msg:
                 msg = Message(body=self.body, properties=self.properties)
